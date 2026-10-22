@@ -35,6 +35,20 @@ public final class T {
     }
 
     static {
+        TA.put("If the screen does not open, go to:", "திரை திறக்காவிட்டால் இங்கு செல்லவும்:");
+        HI.put("If the screen does not open, go to:", "स्क्रीन न खुले तो यहाँ जाएँ:");
+        TA.put("some TVs: Settings → System → Accessibility, or Settings → Apps → Special app access", "சில டிவிகள்: Settings → System → Accessibility, அல்லது Settings → Apps → Special app access");
+        HI.put("some TVs: Settings → System → Accessibility, or Settings → Apps → Special app access", "कुछ टीवी: Settings → System → Accessibility, या Settings → Apps → Special app access");
+        TA.put("Other ways", "வேறு வழிகள்");
+        HI.put("Other ways", "दूसरे तरीके");
+        TA.put("Device Preferences → Accessibility → TamilCastPlay phone remote → ON", "Device Preferences → Accessibility → TamilCastPlay phone remote → ON");
+        HI.put("Device Preferences → Accessibility → TamilCastPlay phone remote → ON", "Device Preferences → Accessibility → TamilCastPlay phone remote → ON");
+        TA.put("Your TV may hide the Accessibility screen. Turn it on once with adb (from a PC, or a phone app such as “Remote ADB Shell” / “Bugjaeger”):", "உங்கள் டிவி Accessibility திரையை மறைத்திருக்கலாம். adb மூலம் ஒருமுறை இயக்கவும் (PC அல்லது “Remote ADB Shell” / “Bugjaeger” போன்ற போன் செயலி):");
+        HI.put("Your TV may hide the Accessibility screen. Turn it on once with adb (from a PC, or a phone app such as “Remote ADB Shell” / “Bugjaeger”):", "आपका टीवी Accessibility स्क्रीन छिपा सकता है। adb से एक बार चालू करें (PC से, या “Remote ADB Shell” / “Bugjaeger” जैसे फ़ोन ऐप से):");
+        TA.put("TV volume and ⏯ already work without it. Inside TamilCastPlay the phone remote always works.", "டிவி ஒலியும் ⏯-ம் இது இல்லாமலே வேலை செய்யும். TamilCastPlay உள்ளே போன் ரிமோட் எப்போதும் வேலை செய்யும்.");
+        HI.put("TV volume and ⏯ already work without it. Inside TamilCastPlay the phone remote always works.", "टीवी आवाज़ और ⏯ इसके बिना भी चलते हैं। TamilCastPlay के अंदर फ़ोन रिमोट हमेशा चलता है।");
+        TA.put("Copy", "நகலெடு");
+        HI.put("Copy", "कॉपी करें");
         TA.put("Control the whole TV from the phone", "போனிலிருந்து முழு டிவியையும் கட்டுப்படுத்து");
         HI.put("Control the whole TV from the phone", "फ़ोन से पूरा टीवी चलाएँ");
         TA.put("On the next screen choose “TamilCastPlay phone remote” and switch it ON. Then the phone remote works in every app (Home, Netflix, settings…).", "அடுத்த திரையில் “TamilCastPlay phone remote” தேர்ந்து ON செய்யவும். பிறகு போன் ரிமோட் எல்லா செயலிகளிலும் வேலை செய்யும் (முகப்பு, Netflix, அமைப்புகள்…).");

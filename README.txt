@@ -1,3 +1,14 @@
+TAMILCASTPLAY 1.8.1
+===================
+* "Control the whole TV" / permission buttons now try the TV-brand Settings screens
+  (Android TV settings, phone settings, main Settings) and skip ones that only show
+  "no app can handle this action". If nothing opens, the app shows the path and an
+  adb command (Copy button). Manual path on most TVs:
+     Settings > Device Preferences > Accessibility > TamilCastPlay phone remote > ON
+  adb (PC or a phone adb app):
+     adb shell settings put secure enabled_accessibility_services com.tamil.castplay/com.mytv.player.TvAccess
+     adb shell settings put secure accessibility_enabled 1
+
 TAMILCASTPLAY 1.8 — timeline, gestures, notification remote, whole-TV control
 =============================================================================
 Player
