@@ -1,3 +1,43 @@
+TAMILCASTPLAY 2.0 — brightness, torrent cache, quality, full remote
+====================================================================
+* ☀ Brightness on the TV picture: phone remote (Remote tab, under Volume), browser
+  page, and player ☰ menu. 10-99% dims the picture (works on every TV);
+  101-150% brightens it with a picture filter (uses the software decoder).
+* Torrent cache: data now stays on the TV. A hang / going back / playing again
+  re-uses what is already downloaded (no extra internet), even for magnets
+  (the torrent info is saved too). Auto-retries 3x when a torrent stalls.
+  When a torrent movie ends: "Keep this movie on the TV?" Keep = "Downloads"
+  playlist, plays offline. Delete = frees the space. Not-kept data is removed
+  after 7 days or when free space drops under 2 GB.
+  Storage: TV ⚙ Settings > Torrent storage, or phone Cast tab.
+* 📶 Streaming quality limit (Best/1080/720/480/360): IPTV/HLS/DASH streams play
+  the lower quality = less data. Torrents: when a torrent has several versions,
+  the matching one is picked first (sizes shown). A single torrent file cannot be
+  made smaller — the whole file must download.
+* 🔌 Full remote for every app (ADB): real key presses in YouTube, Netflix,
+  launcher, settings. TV: Developer options > USB/Network debugging ON, then
+  ⚙ Settings > Full remote (or the 🔌 button on the phone) > Connect > on the TV
+  tick "Always allow" > OK. Keys take ~0.5 s each this way.
+
+TAMILCASTPLAY 1.9 — player keys fixed + colour palettes
+=======================================================
+Player (TV remote)
+* OK now plays/pauses even when the timeline bar is selected.
+* Back no longer closes the player by accident: 1st press hides the controls,
+  then "Press Back again to exit". Stop key still exits straight away.
+* Every rewind / forward key style works (Rewind, Fast-forward, Skip/Step back &
+  forward): 10 s per press, 60 s when you hold it.
+* If anything ever closes the app, the TV home shows the reason next time (Copy
+  button) — please send it if that happens.
+Colours
+* ⚙ Settings > Colours & style: 10 palettes (Purple Night, Ocean Blue, Emerald,
+  Sunset Orange, Ruby Red, Royal Gold, Pink Rose, Mono Grey, Teal & Amber,
+  Midnight Blue) plus your own colours for: main colour, second colour,
+  background, cards and top/bottom bars. "Reset custom colours" goes back.
+* Phone app: Playlist tab > "TV colours" (changes the TV) and
+  "This phone app's colours" (changes the phone app).
+* Browser page follows the TV's colours (switch off in Library > TV settings).
+
 TAMILCASTPLAY 1.8.1
 ===================
 * "Control the whole TV" / permission buttons now try the TV-brand Settings screens

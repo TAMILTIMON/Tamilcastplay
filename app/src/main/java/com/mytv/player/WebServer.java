@@ -316,6 +316,32 @@ public class WebServer extends NanoHTTPD {
                     String c = val(p, "c");
                     String v = val(p, "v");
                     String b = val(p, "b");
+                    if ("adbsetup".equals(c)) {
+                        // runs on the TV; the TV shows "Allow debugging?" the first time
+                        new Thread(() -> {
+                            String e = AdbClient.connect(ctx, true);
+                            Store.putBool("adb_on", e == null);
+                            final String m2 = e == null ? "✅ Full remote is ON" : e;
+                            Remote.MAIN.post(() -> android.widget.Toast.makeText(ctx, m2, android.widget.Toast.LENGTH_LONG).show());
+                        }).start();
+                        return msg("On the TV: press “Allow” (tick “Always allow”) if it asks");
+                    }
+                    if ("adboff".equals(c)) {
+                        Store.putBool("adb_on", false);
+                        return msg("Full remote (ADB) off");
+                    }
+                    if ("palette".equals(c)) {
+                        try {
+                            int pi = Integer.parseInt(v);
+                            Store.putInt("pal", pi);
+                            Store.putInt("c_acc", 0);
+                            Store.putInt("c_acc2", 0);
+                            return msg("🎨 " + Palette.NAMES[Math.max(0, Math.min(Palette.NAMES.length - 1, pi))]
+                                    + " (applies when you reopen a screen)");
+                        } catch (Exception e) {
+                            return fail("Bad palette");
+                        }
+                    }
                     if ("apptheme".equals(c)) {
                         Store.putStr("theme", v);
                         return msg("TV app theme: " + v + " (applies when you reopen a screen)");
@@ -358,9 +384,25 @@ public class WebServer extends NanoHTTPD {
                     return msg(command("subfile", f.getAbsolutePath(), ""));
                 }
 
-                case "/torrentstop":
-                    TorrentEngine.get(ctx).stopAsync();
+                case "/torrentstop": {
+                    final TorrentEngine te = TorrentEngine.get(ctx);
+                    final String h = te.currentHash();
+                    new Thread(() -> {
+                        if (h.isEmpty()) te.stop();
+                        else te.deleteData(h);
+                    }).start();
                     return msg("Torrent stopped and its data deleted");
+                }
+
+                case "/torrentcache": {
+                    final TorrentEngine te = TorrentEngine.get(ctx);
+                    if ("clear".equals(val(p, "do")) || "all".equals(val(p, "do"))) {
+                        final boolean all = "all".equals(val(p, "do"));
+                        new Thread(() -> te.clearCache(all)).start();
+                        return msg(all ? "All saved torrents deleted" : "Saved torrents deleted (kept movies stay)");
+                    }
+                    return json(new JSONObject().put("bytes", TorrentEngine.cacheBytes(ctx)).toString());
+                }
 
                 case "/":
                 case "/index.html":
@@ -497,7 +539,14 @@ public class WebServer extends NanoHTTPD {
         o.put("device", Discovery.deviceName(ctx));
         o.put("apptheme", Store.getStr("theme", "dark"));
         o.put("lang", Store.getStr("lang", "en"));
-        o.put("access", TvAccess.on());
+        o.put("access", TvAccess.on() || AdbClient.enabled());
+        o.put("adb", AdbClient.enabled());
+        boolean tvDark = !"light".equals(Store.getStr("theme", "dark"));
+        int[] pc = Palette.resolve(tvDark);
+        o.put("pal", new JSONObject().put("i", Palette.index()).put("custom", Palette.hasCustom()).put("dark", tvDark)
+                .put("acc", Palette.hex(pc[0])).put("acc2", Palette.hex(pc[1])).put("acc3", Palette.hex(pc[2]))
+                .put("bg", Palette.hex(pc[3])).put("bg2", Palette.hex(pc[4])).put("card", Palette.hex(pc[5]))
+                .put("bar", Palette.hex(pc[6])).put("text", Palette.hex(pc[7])).put("dim", Palette.hex(pc[8])));
         PlayerActivity.putSettings(o);
         o.put("torrent", TorrentEngine.get(ctx).status());
         return o;

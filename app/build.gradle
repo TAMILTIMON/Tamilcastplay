@@ -10,8 +10,8 @@ android {
         applicationId 'com.tamil.castplay'
         minSdk 21
         targetSdk 34
-        versionCode 10
-        versionName '1.8.1'
+        versionCode 12
+        versionName '2.0'
     }
 
     // One APK per CPU type keeps the download small. "universal" works on every TV.

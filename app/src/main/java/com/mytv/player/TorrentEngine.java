@@ -93,20 +93,117 @@ public final class TorrentEngine {
     }
 
     /** Removes leftovers from an earlier run. */
+    /** Keeps the cache: deletes data not marked "keep" after 7 days, or oldest first when space is low. */
     public static void cleanupAsync(final Context c) {
         new Thread(new Runnable() {
             @Override
             public void run() {
-                List<File> roots = new ArrayList<>();
-                roots.add(c.getCacheDir());
-                File[] ext = c.getExternalCacheDirs();
-                if (ext != null) for (File e : ext) if (e != null) roots.add(e);
-                for (File r : roots) {
-                    File t = new File(r, "torrents");
-                    if (t.exists() && (inst == null || inst.handle == null)) deleteTree(t);
+                Store.init(c);
+                for (File t : roots(c)) {
+                    File[] kids = t.listFiles();
+                    if (kids == null) continue;
+                    List<File> dirs = new ArrayList<>();
+                    for (File k : kids) {
+                        if (!k.isDirectory()) continue;
+                        if (inst != null && k.getName().equals(inst.hash)) continue;
+                        if (Store.getBool("tkeep_" + k.getName(), false)) continue;
+                        dirs.add(k);
+                    }
+                    Collections.sort(dirs, new Comparator<File>() {
+                        public int compare(File a, File b) {
+                            return Long.compare(a.lastModified(), b.lastModified());
+                        }
+                    });
+                    long week = System.currentTimeMillis() - 7L * 24 * 3600 * 1000;
+                    for (File d : dirs) {
+                        boolean old = d.lastModified() < week;
+                        boolean lowSpace = t.getUsableSpace() < 2L * 1024 * 1024 * 1024;
+                        if (old || lowSpace) {
+                            deleteTree(d);
+                            //noinspection ResultOfMethodCallIgnored
+                            new File(t, d.getName() + ".torrent").delete();
+                        }
+                    }
                 }
             }
         }).start();
+    }
+
+    private static List<File> roots(Context c) {
+        List<File> out = new ArrayList<>();
+        List<File> base = new ArrayList<>();
+        base.add(c.getCacheDir());
+        File[] ext = c.getExternalCacheDirs();
+        if (ext != null) for (File e : ext) if (e != null) base.add(e);
+        for (File r : base) {
+            File t = new File(r, "torrents");
+            if (t.exists()) out.add(t);
+        }
+        return out;
+    }
+
+    private static long size(File f) {
+        if (f.isFile()) return f.length();
+        long n = 0;
+        File[] k = f.listFiles();
+        if (k != null) for (File x : k) n += size(x);
+        return n;
+    }
+
+    /** Bytes used by saved torrents. */
+    public static long cacheBytes(Context c) {
+        long n = 0;
+        for (File t : roots(c)) n += size(t);
+        return n;
+    }
+
+    /** Deletes saved torrent data (optionally also the movies you chose to keep). */
+    public void clearCache(boolean alsoKept) {
+        stop();
+        for (File t : roots(ctx)) {
+            File[] kids = t.listFiles();
+            if (kids == null) continue;
+            for (File k : kids) {
+                String h = k.getName().replace(".torrent", "");
+                if (!alsoKept && Store.getBool("tkeep_" + h, false)) continue;
+                deleteTree(k);
+                if (alsoKept) Store.putBool("tkeep_" + h, false);
+            }
+        }
+    }
+
+    /** Deletes one torrent's saved data. */
+    public void deleteData(String h) {
+        synchronized (this) {
+            if (h.equals(hash)) {
+                openToken++;
+                stopInternal(true);
+            }
+        }
+        for (File t : roots(ctx)) {
+            deleteTree(new File(t, h));
+            //noinspection ResultOfMethodCallIgnored
+            new File(t, h + ".torrent").delete();
+        }
+        Store.putBool("tkeep_" + h, false);
+    }
+
+    /** Marks a torrent as "keep" and adds its file to the Downloads playlist (plays offline). */
+    public void keep(String h, int file, String title, String streamUrl) {
+        Store.putBool("tkeep_" + h, true);
+        String path = null;
+        TorrentHandle th = handle;
+        TorrentInfo ti = info;
+        if (th != null && ti != null && h.equals(hash)) {
+            try {
+                long[] prog = th.fileProgress();
+                if (file < prog.length && prog[file] >= ti.files().fileSize(file)) {
+                    path = ti.files().filePath(file, th.savePath());
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        Store.add("Downloads", new Store.Item(title, path != null ? path : streamUrl, ""));
     }
 
     /**
@@ -116,7 +213,10 @@ public final class TorrentEngine {
     public List<Store.Item> open(String uri) throws Exception {
         final int token;
         synchronized (this) {
-            stopInternal();
+            if (handle != null && uri.trim().equals(activeUri) && activeItems != null) {
+                return new ArrayList<>(activeItems);   // already running: no restart, no re-download
+            }
+            stopInternal(false);
             token = ++openToken;
             state = "Getting torrent info…";
             name = Formats.titleFromUrl(uri);
@@ -124,15 +224,39 @@ public final class TorrentEngine {
         SessionManager s = session();
         File dir = baseDir();
         TorrentInfo ti;
-        if (uri.trim().toLowerCase(Locale.US).startsWith("magnet:")) {
+        String key = "tmeta_" + Integer.toHexString(uri.trim().hashCode());
+        File saved = new File(Store.getStr(key, "/nonexistent"));
+        byte[] meta = null;
+        if (saved.exists()) {
+            state = "Opening saved torrent…";
+            ti = new TorrentInfo(saved);                 // cached: no internet needed for the info
+        } else if (uri.trim().toLowerCase(Locale.US).startsWith("magnet:")) {
             byte[] data = s.fetchMagnet(uri.trim(), 120, dir);
             if (data == null) throw new Exception("Could not get the torrent info (no peers found). Try again later or use another link.");
             ti = TorrentInfo.bdecode(data);
+            meta = data;
         } else if (uri.trim().startsWith("/")) {
             ti = new TorrentInfo(new File(uri.trim()));
         } else {
-            ti = TorrentInfo.bdecode(Net.fetch(uri.trim(), 20_000_000).data);
+            meta = Net.fetch(uri.trim(), 20_000_000).data;
+            ti = TorrentInfo.bdecode(meta);
         }
+        final String hx = ti.infoHash().toHex();
+        if (meta != null) {
+            try {
+                File mf = new File(dir, hx + ".torrent");
+                try (java.io.FileOutputStream o = new java.io.FileOutputStream(mf)) {
+                    o.write(meta);
+                }
+                Store.putStr(key, mf.getAbsolutePath());
+            } catch (Exception ignored) {
+            }
+        }
+        File tdir = new File(dir, hx);
+        //noinspection ResultOfMethodCallIgnored
+        tdir.mkdirs();
+        //noinspection ResultOfMethodCallIgnored
+        tdir.setLastModified(System.currentTimeMillis());
         if (token != openToken) throw new Exception("Cancelled");
 
         final FileStorage fs = ti.files();
@@ -156,10 +280,25 @@ public final class TorrentEngine {
                 return fs.filePath(a).compareToIgnoreCase(fs.filePath(b));
             }
         });
+        final int want = Store.getInt("quality", 0);   // 0 = best, else 1080/720/480/360
+        if (want > 0 && media.size() > 1) {
+            int best = -1, bestScore = Integer.MAX_VALUE;
+            for (int i = 0; i < media.size(); i++) {
+                int q = qualityOf(fs.fileName(media.get(i)));
+                if (q <= 0) continue;
+                int score = q <= want ? want - q : 10000 + q;   // closest at or below the limit
+                if (score < bestScore) {
+                    bestScore = score;
+                    best = i;
+                }
+            }
+            if (best > 0) media.add(0, media.remove(best));
+        }
 
         Priority[] pr = Priority.array(Priority.IGNORE, fs.numFiles());
         pr[media.get(0)] = Priority.DEFAULT;
-        s.download(ti, dir, null, pr, null, TorrentFlags.SEQUENTIAL_DOWNLOAD);
+        state = "Checking saved data…";
+        s.download(ti, tdir, null, pr, null, TorrentFlags.SEQUENTIAL_DOWNLOAD);
 
         TorrentHandle th = null;
         for (int k = 0; k < 150 && th == null; k++) {
@@ -171,7 +310,7 @@ public final class TorrentEngine {
         th.unsetFlags(TorrentFlags.AUTO_MANAGED);
         th.resume();
 
-        String h = ti.infoHash().toHex();
+        String h = hx;
         if (!uri.trim().startsWith("/") || !uri.contains("/cache/")) Store.putStr("torsrc_" + h, uri.trim());
         else {
             // keep a copy of uploaded .torrent files so "Continue watching" can restart them
@@ -191,7 +330,7 @@ public final class TorrentEngine {
         }
         synchronized (this) {
             if (token != openToken) {
-                s.remove(th, SessionHandle.DELETE_FILES);
+                s.remove(th);
                 throw new Exception("Cancelled");
             }
             handle = th;
@@ -205,15 +344,36 @@ public final class TorrentEngine {
         List<Store.Item> out = new ArrayList<>();
         for (int idx : media) {
             String fn = fs.fileName(idx);
-            out.add(new Store.Item(fn, "http://127.0.0.1:" + RemoteService.PORT + "/torrent/" + h + "/" + idx + "/"
+            String sz = String.format(Locale.US, "  · %.1f GB", fs.fileSize(idx) / 1073741824.0);
+            out.add(new Store.Item(fn + (media.size() > 1 ? sz : ""), "http://127.0.0.1:" + RemoteService.PORT + "/torrent/" + h + "/" + idx + "/"
                     + Uri.encode(fn), ""));
+        }
+        synchronized (this) {
+            activeUri = uri.trim();
+            activeItems = new ArrayList<>(out);
         }
         return out;
     }
 
+    private volatile String activeUri = null;
+    private volatile List<Store.Item> activeItems = null;
+
+    /** 2160/1080/720/480/360 from a file name, or 0. */
+    static int qualityOf(String n) {
+        String l = n.toLowerCase(Locale.US);
+        if (l.contains("2160") || l.contains("4k")) return 2160;
+        if (l.contains("1080")) return 1080;
+        if (l.contains("720")) return 720;
+        if (l.contains("576") || l.contains("540")) return 576;
+        if (l.contains("480")) return 480;
+        if (l.contains("360")) return 360;
+        return 0;
+    }
+
+    /** Stops downloading but KEEPS the data (so playing again needs no internet). */
     public synchronized void stop() {
         openToken++;
-        stopInternal();
+        stopInternal(false);
     }
 
     public void stopAsync() {
@@ -225,8 +385,10 @@ public final class TorrentEngine {
         }).start();
     }
 
-    private void stopInternal() {
+    private void stopInternal(boolean deleteFiles) {
         TorrentHandle th = handle;
+        activeUri = null;
+        activeItems = null;
         handle = null;
         info = null;
         hash = "";
@@ -234,10 +396,15 @@ public final class TorrentEngine {
         state = "idle";
         if (th != null && session != null) {
             try {
-                session.remove(th, SessionHandle.DELETE_FILES);
+                if (deleteFiles) session.remove(th, SessionHandle.DELETE_FILES);
+                else session.remove(th);
             } catch (Throwable ignored) {
             }
         }
+    }
+
+    public String currentHash() {
+        return hash == null ? "" : hash;
     }
 
     public boolean isActiveHash(String h) {
@@ -300,7 +467,7 @@ public final class TorrentEngine {
 
         private void prioritize(int piece) {
             // read-ahead window of ~16 MB (at least 6 pieces) with rising deadlines
-            int window = Math.max(6, (16 * 1024 * 1024) / Math.max(1, pieceLen));
+            int window = Math.max(8, (32 * 1024 * 1024) / Math.max(1, pieceLen));
             for (int k = 0; k < window; k++) {
                 int p = piece + k;
                 if (p > lastPiece) break;
@@ -387,6 +554,7 @@ public final class TorrentEngine {
             o.put("state", state);
             if (th != null && th.isValid()) {
                 TorrentStatus st = th.status();
+                if (st.state() == TorrentStatus.State.CHECKING_FILES) o.put("state", "Checking saved data…");
                 o.put("peers", st.numPeers());
                 o.put("seeds", st.numSeeds());
                 o.put("speed", st.downloadPayloadRate());
@@ -402,6 +570,9 @@ public final class TorrentEngine {
         if (th == null) return state.equals("idle") ? "" : state;
         try {
             TorrentStatus st = th.status();
+            if (st.state() == TorrentStatus.State.CHECKING_FILES) {
+                return String.format(Locale.US, "Checking saved data… %.0f%%", st.progress() * 100f);
+            }
             return String.format(Locale.US, "Torrent: %d peers · %.1f MB/s · %.1f%%",
                     st.numPeers(), st.downloadPayloadRate() / 1048576f, st.progress() * 100f);
         } catch (Exception e) {

@@ -117,6 +117,15 @@ public final class Remote {
         if (k.startsWith("vol_") || k.startsWith("media_")) return systemKey(ctx, k);
         final TvAccess acc = TvAccess.inst;
         boolean ours = App.visible > 0;
+        // ADB mode: real key presses that work in every app (YouTube too)
+        if (AdbClient.enabled() && !(ours && !k.equals("home") && !k.equals("recents"))) {
+            int kc = adbCode(k);
+            if (kc > 0) {
+                String err = AdbClient.key(ctx, kc);
+                if (err == null) return null;
+                if (acc == null && !ours) return err;
+            }
+        }
         if (k.equals("home") || k.equals("recents")) {
             if (acc != null) return acc.key(k) ? null : "Not possible on this TV";
             if (k.equals("home")) {
@@ -126,8 +135,24 @@ public final class Remote {
             return needAccess();
         }
         if (ours) return pressKey(keyCode(k));
-        if (acc != null) return acc.key(k) ? null : "Nothing to press there";
+        if (acc != null) return acc.key(k) ? null
+                : "This app doesn't accept accessibility keys. Turn on the ADB full remote (TV ⚙ Settings, or the 🔌 button)";
         return needAccess();
+    }
+
+    private static int adbCode(String k) {
+        switch (k) {
+            case "up": return 19;
+            case "down": return 20;
+            case "left": return 21;
+            case "right": return 22;
+            case "ok": return 23;
+            case "back": return 4;
+            case "home": return 3;
+            case "recents": return 187;
+            case "menu": return 82;
+            default: return -1;
+        }
     }
 
     public static String needAccess() {
@@ -142,6 +167,7 @@ public final class Remote {
             } catch (Throwable ignored) {
             }
         }
+        if (AdbClient.enabled() && AdbClient.text(ctx, text) == null) return null;
         TvAccess acc = TvAccess.inst;
         if (acc == null) return needAccess();
         return acc.type(text) ? null : "Select a search / text box on the TV first";

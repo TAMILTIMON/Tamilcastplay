@@ -69,7 +69,10 @@ public class NativeRemoteActivity extends AppCompatActivity {
     private int curTab = 0;
 
     // live views
-    private TextView accessHint;
+    private TextView accessHint, brLabel;
+    private SeekBar bright;
+    private Button adbBtn, qualBtn;
+    private long brTouch;
     private TextView npTitle, npSub, tLeft, tRight, volLabel, torLine, adLabel, sdLabel, zoomLabel, devLine;
     private SeekBar seek, vol, zoom;
     private Button playBtn, repBtn, shufBtn, audioBtn, subBtn, fitBtn, aspBtn, sizeBtn, encBtn, presetBtn,
@@ -139,7 +142,8 @@ public class NativeRemoteActivity extends AppCompatActivity {
         // ---- bottom tabs (always on one line, never cover content)
         LinearLayout nav = new LinearLayout(this);
         nav.setPadding(dp(6), dp(6), dp(6), dp(6));
-        nav.setBackground(Ui.card(this, Ui.dark() ? 0xFF1A1430 : 0xFFFFFFFF, Ui.STROKE, 0));
+        nav.setBackground(Ui.card(this, Ui.BAR, Ui.STROKE, 0));
+        top.setBackground(Ui.card(this, Ui.BAR, 0, 0));
         String[] ic = {"🎮", "💬", "🎚", "📡", "📚"};
         String[] lb = {T.t("Remote"), T.t("Subtitles"), T.t("Equalizer"), "Cast", T.t("Playlist")};
         for (int i = 0; i < 5; i++) {
@@ -231,7 +235,7 @@ public class NativeRemoteActivity extends AppCompatActivity {
         LinearLayout c = new LinearLayout(this);
         c.setOrientation(LinearLayout.VERTICAL);
         c.setPadding(dp(14), dp(12), dp(14), dp(14));
-        c.setBackground(Ui.card(this, Ui.dark() ? 0xFF17122A : 0xFFFFFFFF, Ui.STROKE, 18));
+        c.setBackground(Ui.card(this, Ui.SOLID, Ui.STROKE, 18));
         if (title != null) {
             TextView t = Ui.text(this, 11, Ui.DIM, true);
             t.setText(title.toUpperCase(Locale.ROOT));
@@ -575,6 +579,15 @@ public class NativeRemoteActivity extends AppCompatActivity {
         accessHint.setText("ℹ " + T.t("To control other apps, turn on TV Settings > Accessibility > TamilCastPlay"));
         accessHint.setVisibility(View.GONE);
         dc.addView(accessHint);
+        adbBtn = full(dc, btn("🔌 " + T.t("Full remote for every app (ADB)"), true, v -> {
+            new AlertDialog.Builder(this).setTitle("🔌 " + T.t("Full remote for every app (ADB)"))
+                    .setMessage(T.t("Makes the phone remote work in EVERY app (YouTube, Netflix, settings) by pressing real keys.")
+                            + "\n\n1. TV: Settings → Device Preferences → About → press “Build” 7 times."
+                            + "\n2. Settings → Device Preferences → Developer options → USB / Network debugging ON."
+                            + "\n3. Press Connect, then on the TV tick “Always allow” and press OK.")
+                    .setPositiveButton(T.t("Connect"), (dd, ww) -> cmd("adbsetup", ""))
+                    .setNegativeButton(T.t("Cancel"), null).show();
+        }));
         final EditText typeBox = field(dc, "⌨ " + T.t("Type text on the TV (search boxes)"), false);
         full(dc, btn("⌨ " + T.t("Send text"), false, v -> {
             String tx = typeBox.getText().toString();
@@ -609,6 +622,30 @@ public class NativeRemoteActivity extends AppCompatActivity {
         row(vc, btn("🔇", false, v -> cmd("mute", "")), btn("50", false, v -> cmd("vol", "50")),
                 btn("100", false, v -> cmd("vol", "100")), btn("150", false, v -> cmd("vol", "150")),
                 btn("200", true, v -> cmd("vol", "200")));
+        // brightness of the picture on the TV
+        brLabel = Ui.text(this, 14, Ui.TEXT, true);
+        brLabel.setPadding(0, dp(10), 0, 0);
+        vc.addView(brLabel);
+        bright = bar(vc, 140);
+        bright.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            public void onProgressChanged(SeekBar s, int v, boolean user) {
+                if (user) {
+                    brTouch = System.currentTimeMillis();
+                    brLabel.setText("☀ " + (v + 10) + "%" + (v + 10 > 100 ? "  (boost)" : ""));
+                }
+            }
+
+            public void onStartTrackingTouch(SeekBar s) {
+                brTouch = System.currentTimeMillis();
+            }
+
+            public void onStopTrackingTouch(SeekBar s) {
+                brTouch = System.currentTimeMillis();
+                cmd("bright", String.valueOf((s.getProgress() + 10) / 5 * 5));
+            }
+        });
+        row(vc, btn("☀ 50", false, v -> cmd("bright", "50")), btn("☀ 75", false, v -> cmd("bright", "75")),
+                btn("☀ 100", false, v -> cmd("bright", "100")), btn("☀ 125", false, v -> cmd("bright", "125")));
 
         // apps
         LinearLayout ac = card(p, "Apps");
@@ -955,6 +992,13 @@ public class NativeRemoteActivity extends AppCompatActivity {
         sleepBtn = full(pb, btn("", false, v -> pickSleep()));
         hwBtn = full(pb, btn("", false, v -> cmd("hw", S.optInt("hw") == 1 ? "0" : "1")));
         cacheBtn = full(pb, btn("", false, v -> pickCache()));
+        qualBtn = full(pb, btn("📶", false, v -> {
+            final int[] qs = {0, 1080, 720, 480, 360};
+            String[] names = {T.t("Best"), "1080p", "720p", "480p", "360p (" + T.t("saves most data") + ")"};
+            new AlertDialog.Builder(this).setTitle(T.t("Streaming quality: "))
+                    .setItems(names, (d, w) -> cmd("quality", String.valueOf(qs[w]))).show();
+        }));
+        label(pb, "ℹ IPTV / HLS / DASH streams use the lower quality. Torrents: picks the matching file when a torrent has several.");
         return p;
     }
 
@@ -1050,6 +1094,14 @@ public class NativeRemoteActivity extends AppCompatActivity {
         final TextView ts = label(tc, "—");
         ts.setTag("torstat");
         full(tc, btn("⏹ " + T.t("Stop torrent and delete its data"), false, v -> call("/torrentstop", null, null)));
+        final TextView cacheInfo = label(tc, "");
+        full(tc, btn("🧲 " + T.t("Torrent storage: ") + "…", false, v -> call("/torrentcache", null, r -> {
+            final double gb = r.optLong("bytes") / 1073741824.0;
+            cacheInfo.setText(String.format(Locale.US, "💾 %.2f GB", gb));
+            new AlertDialog.Builder(this).setTitle(String.format(Locale.US, "🧲 %s%.2f GB", T.t("Torrent storage: "), gb))
+                    .setItems(new String[]{"🗑 Delete saved torrents (keep my kept movies)", "🗑 Delete everything (also kept movies)"},
+                            (d, w) -> call("/torrentcache", m("do", w == 0 ? "clear" : "all"), null)).show();
+        })));
 
         LinearLayout im = card(p, "M3U");
         final EditText ipl = field(im, T.t("Playlist name"), false);
@@ -1158,6 +1210,11 @@ public class NativeRemoteActivity extends AppCompatActivity {
             cmd("devname", dn.getText().toString().trim());
             hideKeyboard();
         }));
+        full(tvs, btn("🎨 " + T.t("TV colours (palette)"), false, v -> {
+            String[] names = Palette.NAMES;
+            new AlertDialog.Builder(this).setTitle(T.t("Palette")).setItems(names, (d, w) -> cmd("palette", String.valueOf(w))).show();
+        }));
+        full(tvs, btn("🎨 " + T.t("This phone app's colours"), false, v -> Palette.show(this)));
         full(tvs, btn("🌐 Web version", false, v -> startActivity(new Intent(this, RemoteWebActivity.class)
                 .putExtra(RemoteWebActivity.EXTRA_IP, ip).putExtra(RemoteWebActivity.EXTRA_NAME, tvName))));
         return p;
@@ -1425,6 +1482,14 @@ public class NativeRemoteActivity extends AppCompatActivity {
         if (tstat instanceof TextView) setIf((TextView) tstat, ts.isEmpty() ? "—" : ts);
         renderQueue();
         accessHint.setVisibility(S.optBoolean("access", true) ? View.GONE : View.VISIBLE);
+        adbBtn.setVisibility(S.optBoolean("adb", true) ? View.GONE : View.VISIBLE);
+        if (System.currentTimeMillis() - brTouch > 2500) {
+            int bv = S.optInt("bright", 100);
+            bright.setProgress(bv - 10);
+            setIf(brLabel, "☀ " + T.t("Brightness: ") + bv + "%" + (bv > 100 ? "  (boost)" : ""));
+        }
+        int qv = S.optInt("quality", 0);
+        setIf(qualBtn, "📶  " + T.t("Streaming quality: ") + (qv == 0 ? T.t("Best") : qv + "p"));
 
         // tracks
         setIf(audioBtn, "🔊  " + trackName("audio", "audioSel"));

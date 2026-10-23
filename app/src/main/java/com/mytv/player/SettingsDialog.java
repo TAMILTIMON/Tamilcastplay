@@ -45,6 +45,7 @@ public final class SettingsDialog {
         String[] items = {
                 "🌐  Language / மொழி / भाषा: " + T.langName(),
                 "🔐  " + T.t("Remote PIN: ") + (Pair.enabled() ? Pair.pin() : T.t("Off")),
+                "🎨  " + T.t("Colours & style") + ": " + Palette.NAMES[Palette.index()] + (Palette.hasCustom() ? " +" : ""),
                 T.t("🎨  Theme: ") + themeNames[idx(themes, Store.getStr("theme", "dark"))],
                 T.t("📺  Device name: ") + Discovery.deviceName(a),
                 T.t("🖼  Picture fit: ") + PlayerActivity.FIT_NAMES[Math.max(0, Math.min(3, Store.getInt("fit", 0)))],
@@ -61,6 +62,8 @@ public final class SettingsDialog {
                 T.t("🔓  Allow phone to start videos (display over apps): ") + (Perms.overlayOk(a) ? T.t("Allowed") : T.t("Not allowed")),
                 T.t("🔓  Allow access to all files (USB, subtitles): ") + (Perms.filesOk() ? T.t("Allowed") : T.t("Not allowed")),
                 "🎮  " + T.t("Control the whole TV from the phone") + ": " + T.t(Perms.accessOk(a) ? "Allowed" : "Not allowed"),
+                "🔌  " + T.t("Full remote for every app (ADB)") + ": " + T.t(AdbClient.enabled() ? "On" : "Off"),
+                "🧲  " + T.t("Torrent storage: ") + String.format(java.util.Locale.US, "%.2f GB", TorrentEngine.cacheBytes(a) / 1073741824.0),
                 T.t("📱  Use as remote for another TV…"),
                 T.t("ℹ  Phone remote address: http://") + Net.ip() + ":" + RemoteService.PORT};
         new AlertDialog.Builder(a).setTitle(T.t("⚙  Settings")).setItems(items, new DialogInterface.OnClickListener() {
@@ -81,7 +84,11 @@ public final class SettingsDialog {
                     pinMenu(a);
                     return;
                 }
-                switch (w - 2) {
+                if (w == 2) {
+                    Palette.show(a);
+                    return;
+                }
+                switch (w - 3) {
                     case 0:
                         choose(a, T.t("Theme"), themeNames, idx(themes, Store.getStr("theme", "dark")), new IntCb() {
                             public void on(int i) {
@@ -190,6 +197,14 @@ public final class SettingsDialog {
                         Perms.openAccessSettings(a);
                         break;
                     case 16:
+                        adbSetup(a);
+                        break;
+                    case 17:
+                        new AlertDialog.Builder(a).setTitle("🧲  " + T.t("Torrent storage: "))
+                                .setItems(new String[]{"🗑 Delete saved torrents (keep my kept movies)", "🗑 Delete everything (also kept movies)"},
+                                        (d2, w2) -> new Thread(() -> TorrentEngine.get(a).clearCache(w2 == 1)).start()).show();
+                        break;
+                    case 18:
                         a.startActivity(new Intent(a, ConnectActivity.class));
                         break;
                     default:
@@ -197,6 +212,26 @@ public final class SettingsDialog {
                 }
             }
         }).show();
+    }
+
+    /** ADB full remote: steps, then connect (TV asks "Allow debugging?"). */
+    static void adbSetup(final Activity a) {
+        String steps = T.t("Makes the phone remote work in EVERY app (YouTube, Netflix, settings) by pressing real keys.")
+                + "\n\n1. TV Settings → Device Preferences → About → press “Build” 7 times (Developer options on)."
+                + "\n2. Settings → Device Preferences → Developer options → turn on USB debugging / Network debugging."
+                + "\n3. Press Connect. When the TV asks “Allow debugging?”, tick “Always allow” and press OK.";
+        new AlertDialog.Builder(a).setTitle("🔌  " + T.t("Full remote for every app (ADB)")).setMessage(steps)
+                .setPositiveButton(T.t("Connect"), (d, w) -> {
+                    android.widget.Toast.makeText(a, "…", android.widget.Toast.LENGTH_SHORT).show();
+                    new Thread(() -> {
+                        final String e = AdbClient.connect(a, true);
+                        Store.putBool("adb_on", e == null);
+                        a.runOnUiThread(() -> android.widget.Toast.makeText(a, e == null ? "✅ " + T.t("Full remote for every app (ADB)") + ": ON" : e,
+                                android.widget.Toast.LENGTH_LONG).show());
+                    }).start();
+                })
+                .setNeutralButton(T.t("Off"), (d, w) -> Store.putBool("adb_on", false))
+                .setNegativeButton(T.t("Cancel"), null).show();
     }
 
     /** Restarts the app so every screen uses the new language. */

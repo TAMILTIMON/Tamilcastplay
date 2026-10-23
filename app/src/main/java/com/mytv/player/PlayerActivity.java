@@ -352,6 +352,13 @@ public class PlayerActivity extends AppCompatActivity {
         videoLayout = new VLCVideoLayout(this);
         root.addView(videoLayout, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT, Gravity.CENTER));
+        dimView = new View(this);
+        dimView.setBackgroundColor(Color.BLACK);
+        dimView.setAlpha(0f);
+        dimView.setFocusable(false);
+        root.addView(dimView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+        applyBrightnessLayer();
         // tap anywhere (phones) = show / hide controls
         View touch = new View(this);
         touch.setOnTouchListener(this::onGesture);
@@ -408,7 +415,7 @@ public class PlayerActivity extends AppCompatActivity {
         osdView = text(19, Color.WHITE);
         osdView.setPadding(dp(20), dp(10), dp(20), dp(10));
         GradientDrawable obg = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT,
-                new int[]{0xE68B5CF6, 0xE6EC4899});
+                new int[]{0xE6000000 | (Ui.ACCENT & 0xFFFFFF), 0xE6000000 | (Ui.ACCENT2 & 0xFFFFFF)});
         obg.setCornerRadius(dp(22));
         osdView.setBackground(obg);
         osdView.setVisibility(View.GONE);
@@ -429,7 +436,7 @@ public class PlayerActivity extends AppCompatActivity {
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(dp(28), dp(18), dp(28), dp(16));
         GradientDrawable pbg = new GradientDrawable();
-        pbg.setColor(0xB3120D22);
+        pbg.setColor(0xCC000000 | (Palette.mix(Ui.BAR, 0xFF000000, Palette.lum(Ui.BAR) > 0.5f ? 0.85f : 0.3f) & 0xFFFFFF));
         pbg.setStroke(dp(1), 0x33FFFFFF);
         pbg.setCornerRadius(dp(26));
         panel.setBackground(pbg);
@@ -701,6 +708,31 @@ public class PlayerActivity extends AppCompatActivity {
         }
     };
 
+    private long lastBack = 0;
+    private int brightPending = 100;
+    private final Runnable brightApply = new Runnable() {
+        public void run() {
+            command("bright", String.valueOf(brightPending), "");
+        }
+    };
+
+    private static boolean isPlayerKey(int c) {
+        return c == KeyEvent.KEYCODE_BACK || c == KeyEvent.KEYCODE_MEDIA_REWIND || c == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
+                || c == KeyEvent.KEYCODE_MEDIA_SKIP_BACKWARD || c == KeyEvent.KEYCODE_MEDIA_SKIP_FORWARD
+                || c == KeyEvent.KEYCODE_MEDIA_STEP_BACKWARD || c == KeyEvent.KEYCODE_MEDIA_STEP_FORWARD
+                || c == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE || c == KeyEvent.KEYCODE_DPAD_CENTER;
+    }
+
+    private View dimView;
+    private boolean lastBoost;
+
+    /** 10..100% = dim the picture with a dark layer (works on every TV); 100..150% = VLC brighten filter. */
+    private void applyBrightnessLayer() {
+        int b = Store.getInt("bright", 100);
+        lastBoost = b > 100;
+        if (dimView != null) dimView.setAlpha(b >= 100 ? 0f : Math.min(0.9f, (100 - b) / 100f));
+    }
+
     private boolean controlsFocused() {
         View f = getCurrentFocus();
         return overlayVisible && (f instanceof Button || f instanceof SeekBar);
@@ -799,6 +831,11 @@ public class PlayerActivity extends AppCompatActivity {
         o.add("--network-caching=" + Store.getInt("cache", 2000));
         o.add("--http-reconnect");
         o.add("--audio-time-stretch");
+        int q = Store.getInt("quality", 0);
+        if (q > 0) {
+            o.add("--preferred-resolution=" + q);   // HLS / DASH / IPTV: pick this quality or lower
+            o.add("--adaptive-maxheight=" + q);
+        }
         o.add("--freetype-rel-fontsize=" + Store.getInt("subsize", 16));
         o.add("--freetype-color=16777215");
         if (Store.getBool("subbg", false)) {
@@ -939,6 +976,15 @@ public class PlayerActivity extends AppCompatActivity {
         }
         if (startMs > 0) m.addOption(String.format(Locale.US, ":start-time=%.2f", startMs / 1000.0));
         if (Store.getInt("hw", 0) == 1) m.setHWDecoderEnabled(false, false);
+        if (it.u.contains("127.0.0.1:" + RemoteService.PORT + "/torrent/")) m.addOption(":network-caching=8000");
+        int br = Store.getInt("bright", 100);
+        if (br > 100) {
+            // brighter than normal: VLC picture filter (software)
+            m.addOption(":video-filter=adjust");
+            m.addOption(String.format(Locale.US, ":brightness=%.2f", br / 100f));
+            m.addOption(String.format(Locale.US, ":contrast=%.2f", 1f + (br - 100) / 400f));
+            m.setHWDecoderEnabled(false, false);
+        }
         if (it.u.startsWith("http")) {
             String ua = Net.UA, ref = null;
             int bar = it.u.indexOf('|');
@@ -1127,7 +1173,21 @@ public class PlayerActivity extends AppCompatActivity {
         }).start();
     }
 
+    private int torrentRetries = 0;
+
     private void onPlayError(String msg) {
+        Store.Item cur = current();
+        if (cur != null && torrentHash(cur.u) != null && torrentRetries < 3 && mp != null) {
+            torrentRetries++;
+            final long at = Math.max(0, mp.getTime());
+            showLoading(T.t("Waiting for the torrent…") + " (" + torrentRetries + "/3)");
+            final int token = resolveToken;
+            handler.postDelayed(() -> {
+                if (token != resolveToken || isFinishing() || current() == null) return;
+                startMedia(current(), at > 0 ? at : Store.pos(current().u), null);
+            }, 4000);
+            return;
+        }
         if (channelMode()) {
             showLoading(msg + "\n" + T.t("OK = retry · CH+ / CH− = another channel · 📺 = list"));
             showOverlay();
@@ -1151,6 +1211,7 @@ public class PlayerActivity extends AppCompatActivity {
             switch (e.type) {
                 case MediaPlayer.Event.Playing:
                     hideLoading();
+                    torrentRetries = 0;
                     applyAudio();
                     applyPicture();
                     handler.postDelayed(new Runnable() {
@@ -1202,6 +1263,42 @@ public class PlayerActivity extends AppCompatActivity {
     private void onEnded() {
         if (ended) return;
         ended = true;
+        Store.Item fin = current();
+        final String th = fin == null ? null : torrentHash(fin.u);
+        if (th != null && !Store.getBool("tkeep_" + th, false) && !Store.getBool("tasked_" + th, false)) {
+            Store.putBool("tasked_" + th, true);
+            askKeep(fin, th);
+            return;
+        }
+        afterEnded();
+    }
+
+    /** Movie from a torrent finished: keep it on the TV for later (no internet) or delete it. */
+    private void askKeep(final Store.Item it, final String th) {
+        int file = 0;
+        try {
+            String rest = it.u.substring(it.u.indexOf("/torrent/") + 9);
+            file = Integer.parseInt(rest.split("/")[1]);
+        } catch (Exception ignored) {
+        }
+        final int f = file;
+        new AlertDialog.Builder(this).setTitle("💾  " + T.t("Keep this movie on the TV?"))
+                .setMessage(it.t + "\n\n" + T.t("Keep = watch again later without internet (in the “Downloads” playlist). Delete = free the space."))
+                .setPositiveButton(T.t("Keep"), (d, w) -> {
+                    TorrentEngine.get(this).keep(th, f, it.t, it.u);
+                    osd("💾 " + T.t("Saved in Downloads"));
+                    afterEnded();
+                })
+                .setNegativeButton(T.t("Delete"), (d, w) -> {
+                    TorrentEngine.get(this).deleteData(th);
+                    osd("🗑 " + T.t("Deleted"));
+                    afterEnded();
+                })
+                .setOnCancelListener(d -> afterEnded())
+                .show();
+    }
+
+    private void afterEnded() {
         Store.Item it = current();
         if (it != null) {
             Store.setPos(it.u, 0);
@@ -1436,14 +1533,30 @@ public class PlayerActivity extends AppCompatActivity {
                 if (event.getAction() == KeyEvent.ACTION_DOWN) hideOverlayNow();
                 return true;
             }
+            // OK while the timeline is selected = play / pause (a bar has no "click")
+            if (getCurrentFocus() instanceof SeekBar && (code == KeyEvent.KEYCODE_DPAD_CENTER
+                    || code == KeyEvent.KEYCODE_ENTER || code == KeyEvent.KEYCODE_NUMPAD_ENTER)) {
+                if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+                    timelineSeek.run();
+                    togglePause();
+                }
+                return true;
+            }
             if (nav) {
                 handler.removeCallbacks(hideOverlay);
                 handler.postDelayed(hideOverlay, 9000);
                 return super.dispatchKeyEvent(event);
             }
         }
-        if (event.getAction() == KeyEvent.ACTION_DOWN && handleKey(code, event.getRepeatCount())) {
-            return true;
+        if (event.getAction() == KeyEvent.ACTION_DOWN) {
+            try {
+                if (handleKey(code, event.getRepeatCount())) return true;
+            } catch (Throwable t) {
+                osd("⚠ " + t.getClass().getSimpleName());   // never let a key close the player
+                return true;
+            }
+        } else if (isPlayerKey(code)) {
+            return true;   // swallow the key-up too, so the system never acts on it
         }
         return super.dispatchKeyEvent(event);
     }
@@ -1485,10 +1598,16 @@ public class PlayerActivity extends AppCompatActivity {
                 seekBy(repeat >= 3 ? 30000 : 10000);
                 return true;
             case KeyEvent.KEYCODE_MEDIA_REWIND:
-                seekBy(-30000);
+            case KeyEvent.KEYCODE_MEDIA_SKIP_BACKWARD:
+            case KeyEvent.KEYCODE_MEDIA_STEP_BACKWARD:
+                seekBy(repeat >= 3 ? -60000 : -10000);
+                return true;
+            case KeyEvent.KEYCODE_MEDIA_SKIP_FORWARD:
+            case KeyEvent.KEYCODE_MEDIA_STEP_FORWARD:
+                seekBy(repeat >= 3 ? 60000 : 10000);
                 return true;
             case KeyEvent.KEYCODE_MEDIA_FAST_FORWARD:
-                seekBy(30000);
+                seekBy(repeat >= 3 ? 60000 : 10000);
                 return true;
             case KeyEvent.KEYCODE_DPAD_UP:
                 if (repeat == 0) {
@@ -1544,8 +1663,21 @@ public class PlayerActivity extends AppCompatActivity {
                 }
                 return true;
             case KeyEvent.KEYCODE_MEDIA_STOP:
-            case KeyEvent.KEYCODE_BACK:
                 if (repeat == 0) finish();
+                return true;
+            case KeyEvent.KEYCODE_BACK:
+                // Back: first hides the controls, then asks once more before leaving
+                if (repeat > 0) return true;
+                if (overlayVisible) {
+                    hideOverlayNow();
+                    return true;
+                }
+                long now = System.currentTimeMillis();
+                if (now - lastBack < 2500) finish();
+                else {
+                    lastBack = now;
+                    osd(T.t("Press Back again to exit"));
+                }
                 return true;
             default:
                 if (code >= KeyEvent.KEYCODE_0 && code <= KeyEvent.KEYCODE_9 && repeat == 0 && channelMode()) {
@@ -1763,6 +1895,23 @@ public class PlayerActivity extends AppCompatActivity {
             labels.add("🔒  " + T.t("Lock screen"));
             acts.add(new Runnable() { public void run() { command("lock", "1", ""); } });
         }
+        labels.add("☀  " + T.t("Brightness: ") + Store.getInt("bright", 100) + "%");
+        acts.add(new Runnable() { public void run() {
+            stepper(T.t("Brightness: "), Store.getInt("bright", 100), 5, 10, 150, 100, new Fmt() {
+                public String f(float v) { return Math.round(v) + "%"; }
+            }, new FloatCb() {
+                public void on(float v) { brightPending = Math.round(v); handler.removeCallbacks(brightApply); handler.postDelayed(brightApply, 700); }
+            });
+        } });
+        int qn = Store.getInt("quality", 0);
+        labels.add("📶  " + T.t("Streaming quality: ") + (qn == 0 ? T.t("Best") : qn + "p"));
+        acts.add(new Runnable() { public void run() {
+            final int[] qs = {0, 1080, 720, 480, 360};
+            String[] names = {T.t("Best"), "1080p", "720p", "480p", "360p (" + T.t("saves most data") + ")"};
+            int sel = 0;
+            for (int i = 0; i < qs.length; i++) if (qs[i] == Store.getInt("quality", 0)) sel = i;
+            choose(T.t("Streaming quality: "), names, sel, new IntCb() { public void on(int i) { command("quality", String.valueOf(qs[i]), ""); } });
+        } });
         labels.add("🏠  " + T.t("Go to Home"));
         acts.add(new Runnable() { public void run() { Ui.goHome(PlayerActivity.this, true); } });
         labels.add(T.t("Phone remote: http://") + Net.ip() + ":" + RemoteService.PORT);
@@ -2266,6 +2415,16 @@ public class PlayerActivity extends AppCompatActivity {
                 case "adelay":
                     Store.putInt("adelay", Math.max(-30000, Math.min(30000, Math.round(Float.parseFloat(v)))));
                     return "Audio delay " + fmtMs(Store.getInt("adelay", 0));
+                case "bright": {
+                    int bv = Math.max(10, Math.min(150, Math.round(Float.parseFloat(v))));
+                    Store.putInt("bright", bv);
+                    return "☀ " + bv + "%";
+                }
+                case "quality": {
+                    int qv = Integer.parseInt(v);
+                    Store.putInt("quality", qv);
+                    return T.t("Streaming quality: ") + (qv == 0 ? T.t("Best") : qv + "p");
+                }
                 default:
                     return null;
             }
@@ -2311,6 +2470,15 @@ public class PlayerActivity extends AppCompatActivity {
                 break;
             case "adelay":
                 mp.setAudioDelay(Store.getInt("adelay", 0) * 1000L);
+                break;
+            case "bright": {
+                boolean wasBoost = lastBoost;
+                applyBrightnessLayer();
+                if (wasBoost != (Store.getInt("bright", 100) > 100) || Store.getInt("bright", 100) > 100) reloadCurrent();
+                break;
+            }
+            case "quality":
+                restartEngine();
                 break;
 
             // ---- player actions ----
@@ -2491,6 +2659,8 @@ public class PlayerActivity extends AppCompatActivity {
         o.put("hw", Store.getInt("hw", 0));
         o.put("cache", Store.getInt("cache", 2000));
         o.put("adelay", Store.getInt("adelay", 0));
+        o.put("bright", Store.getInt("bright", 100));
+        o.put("quality", Store.getInt("quality", 0));
         JSONObject eq = new JSONObject();
         eq.put("on", Store.getBool("eq_on", false));
         eq.put("preset", Store.getInt("eq_preset", -1));
@@ -2529,6 +2699,8 @@ public class PlayerActivity extends AppCompatActivity {
         o.put("sleeps", sl);
         String[] pr = PRESETS != null ? PRESETS : DEFAULT_PRESETS;
         o.put("presets", new JSONArray(java.util.Arrays.asList(pr)));
+        o.put("palettes", new JSONArray(java.util.Arrays.asList(Palette.NAMES)));
+        o.put("qualities", new JSONArray(java.util.Arrays.asList(0, 1080, 720, 480, 360)));
         return o;
     }
 
