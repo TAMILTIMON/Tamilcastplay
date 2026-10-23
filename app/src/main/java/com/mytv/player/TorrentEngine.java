@@ -52,6 +52,14 @@ public final class TorrentEngine {
         ctx = c;
     }
 
+    SessionManager sessionForDownloads() {
+        return session();
+    }
+
+    File folder() {
+        return baseDir();
+    }
+
     private synchronized SessionManager session() {
         if (session == null) {
             SettingsPack sp = new SettingsPack();
@@ -387,6 +395,7 @@ public final class TorrentEngine {
 
     private void stopInternal(boolean deleteFiles) {
         TorrentHandle th = handle;
+        if (th != null && TorrentDownloads.has(hash) && !deleteFiles) th = null;   // keep downloading for later
         activeUri = null;
         activeItems = null;
         handle = null;

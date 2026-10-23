@@ -238,7 +238,7 @@ public class PlayerActivity extends AppCompatActivity {
         handler.removeCallbacks(tick);
         savePosition();
         if (mp != null) {
-            mp.pause();
+            if (!audioOnly) mp.pause();      // audio-only keeps playing with the screen off / app in background
             if (viewsAttached) {
                 mp.detachViews();
                 viewsAttached = false;
@@ -249,6 +249,13 @@ public class PlayerActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        previewEx.execute(() -> {
+            if (mmr != null) try {
+                mmr.release();
+            } catch (Exception ignored) {
+            }
+        });
+        previewEx.shutdown();
         handler.removeCallbacksAndMessages(null);
         if (Remote.player == this) Remote.player = null;
         resolveToken++;
@@ -431,6 +438,15 @@ public class PlayerActivity extends AppCompatActivity {
         ulp.setMargins(dp(28), 0, 0, 0);
         root.addView(unlockBtn, ulp);
 
+        chip = Ui.button(this, "⏩", true);
+        chip.setTextSize(16);
+        chip.setVisibility(View.GONE);
+        chip.setOnClickListener(v -> chipAction());
+        FrameLayout.LayoutParams clp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                dp(50), Gravity.BOTTOM | Gravity.END);
+        clp.setMargins(0, 0, dp(48), dp(140));
+        root.addView(chip, clp);
+
         // ---- bottom glass panel
         panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
@@ -478,6 +494,7 @@ public class PlayerActivity extends AppCompatActivity {
                 if (len <= 0) return;
                 long target = len * v / 1000;
                 timeView.setText("⏩ " + Net.fmtTime(target) + " / " + Net.fmtTime(len));
+                showPreview(target);
                 timelineMoved = System.currentTimeMillis();
                 handler.removeCallbacks(hideOverlay);
                 handler.postDelayed(hideOverlay, 6000);
@@ -664,6 +681,7 @@ public class PlayerActivity extends AppCompatActivity {
                     long span = Math.max(180000, mp.getLength() / 10);
                     gSeekTarget = Math.max(0, Math.min(mp.getLength() - 1000, gSeekBase + (long) (dx / w * span)));
                     long diff = gSeekTarget - gSeekBase;
+                    showPreview(gSeekTarget);
                     osd((diff >= 0 ? "⏩ +" : "⏪ −") + Net.fmtTime(Math.abs(diff)) + "   →  " + Net.fmtTime(gSeekTarget)
                             + " / " + Net.fmtTime(mp.getLength()));
                 }
@@ -805,8 +823,40 @@ public class PlayerActivity extends AppCompatActivity {
 
     private int tickN = 0;
 
+    // ---- "Skip intro" and "Next episode in …" (Netflix style)
+    private Button chip;
+    private int chipMode = 0;          // 0 hidden, 1 skip intro, 2 next episode
+    private boolean skipDone;
+    private int nextShownFor = -1;
+
+    private void updateChip() {
+        if (chip == null || mp == null) return;
+        int mode = 0;
+        long t = mp.getTime(), len = mp.getLength();
+        if (!channelMode() && len > 10 * 60000 && mp.isPlaying() && !locked) {
+            if (!skipDone && t > 8000 && t < 180000 && Store.getInt("skip_s", 85) > 0) mode = 1;
+            else if (index + 1 < queue.size() && len - t < 16000 && len - t > 0) mode = 2;
+        }
+        if (mode == 2) chip.setText("⏭  " + T.t("Next") + ": " + queue.get(index + 1).t + "  ·  " + Math.max(1, (len - t) / 1000) + " s  ·  OK");
+        else if (mode == 1) chip.setText("⏩  " + T.t("Skip intro") + "  ·  OK");
+        if (mode != chipMode) {
+            chipMode = mode;
+            chip.setVisibility(mode == 0 ? View.GONE : View.VISIBLE);
+        }
+    }
+
+    private void chipAction() {
+        if (chipMode == 1) {
+            skipDone = true;
+            seekBy(Store.getInt("skip_s", 85) * 1000L);
+        } else if (chipMode == 2) next();
+        chipMode = 0;
+        chip.setVisibility(View.GONE);
+    }
+
     private void onTick() {
         tickN++;
+        updateChip();
         if (overlayVisible && tickN % 2 == 0) updateOverlay();
         if (loadingView.getVisibility() == View.VISIBLE && torrentUsed && mp != null && !mp.isPlaying()) {
             String ts = TorrentEngine.get(this).shortStatus();
@@ -821,6 +871,22 @@ public class PlayerActivity extends AppCompatActivity {
             return;
         }
         if (System.currentTimeMillis() - lastSave > 15000) savePosition();
+        if (mp != null && mp.isPlaying()) {
+            Family.tick(0.5f);
+            if (Family.minutesLeft() == 0 && !timesUpShown) {
+                timesUpShown = true;
+                mp.pause();
+                new AlertDialog.Builder(this).setTitle("⏰ " + T.t("Time's up for today"))
+                        .setMessage(T.t("The daily screen time for this profile is used up."))
+                        .setCancelable(false)
+                        .setPositiveButton("🔒 " + T.t("Parents: +30 min"), (d, w) -> Family.askPin(this, "", () -> {
+                            Family.addBonus(30);
+                            timesUpShown = false;
+                            mp.play();
+                        }))
+                        .setNegativeButton(T.t("Close"), (d, w) -> finish()).show();
+            }
+        }
     }
 
     // =====================================================================
@@ -831,6 +897,27 @@ public class PlayerActivity extends AppCompatActivity {
         o.add("--network-caching=" + Store.getInt("cache", 2000));
         o.add("--http-reconnect");
         o.add("--audio-time-stretch");
+        List<String> af = new ArrayList<>();
+        int dl = dialogLevel();
+        if (dl > 0) {
+            // clear dialogue: loud music / fights squeezed, quiet voices lifted (works all the time while On)
+            int[] thr = {0, -20, -24, -28}, ratio = {0, 3, 6, 10}, gain = {0, 6, 10, 14};
+            af.add("compressor");
+            o.add("--compressor-rms-peak=0.2");
+            o.add("--compressor-attack=20");
+            o.add("--compressor-release=120");
+            o.add("--compressor-threshold=" + thr[dl]);
+            o.add("--compressor-ratio=" + ratio[dl]);
+            o.add("--compressor-knee=4");
+            o.add("--compressor-makeup-gain=" + gain[dl]);
+        }
+        if (Store.getBool("level", false)) {
+            // same loudness between channels / videos
+            af.add("normvol");
+            o.add("--norm-buff-size=20");
+            o.add("--norm-max-level=1.5");
+        }
+        if (!af.isEmpty()) o.add("--audio-filter=" + android.text.TextUtils.join(":", af));
         int q = Store.getInt("quality", 0);
         if (q > 0) {
             o.add("--preferred-resolution=" + q);   // HLS / DASH / IPTV: pick this quality or lower
@@ -930,8 +1017,306 @@ public class PlayerActivity extends AppCompatActivity {
         return index >= 0 && index < queue.size() ? queue.get(index) : null;
     }
 
+    static String dialogName(int l) {
+        return T.t(l == 1 ? "Light boost" : l == 2 ? "Medium boost" : l == 3 ? "Strong boost" : "Off");
+    }
+
+    private boolean timesUpShown;
+
+    // ---- bookmarks inside a video
+    private void addBookmark() {
+        Store.Item it = current();
+        if (it == null || mp == null) return;
+        long t = Math.max(0, mp.getTime());
+        Store.addBookmark(it.u, t, Net.fmtTime(t));
+        osd("🔖 " + T.t("Bookmark saved") + " · " + Net.fmtTime(t));
+    }
+
+    private void menuBookmarks() {
+        final Store.Item it = current();
+        if (it == null) return;
+        final JSONArray a = Store.bookmarks(it.u);
+        String[] n = new String[a.length()];
+        for (int i = 0; i < n.length; i++) n[i] = "⏱ " + Net.fmtTime(a.optJSONObject(i).optLong("t"));
+        new AlertDialog.Builder(this).setTitle("🔖 " + T.t("Bookmarks")).setItems(n, (d, w) -> {
+            final long t = a.optJSONObject(w).optLong("t");
+            new AlertDialog.Builder(this).setTitle("⏱ " + Net.fmtTime(t))
+                    .setItems(new String[]{"▶ " + T.t("Jump here"), "🗑 " + T.t("Delete")}, (d2, w2) -> {
+                        if (w2 == 0) seekTo(t);
+                        else Store.delBookmark(it.u, w);
+                    }).show();
+        }).show();
+    }
+
+    // ---- screenshot of the current frame (USB drive, else Pictures/TamilCastPlay)
+    private android.view.SurfaceView findSurface(View v) {
+        if (v instanceof android.view.SurfaceView && v.getWidth() > 0) return (android.view.SurfaceView) v;
+        if (v instanceof ViewGroup) {
+            for (int i = 0; i < ((ViewGroup) v).getChildCount(); i++) {
+                android.view.SurfaceView s2 = findSurface(((ViewGroup) v).getChildAt(i));
+                if (s2 != null) return s2;
+            }
+        }
+        return null;
+    }
+
+    private void screenshot() {
+        if (mp == null || current() == null) return;
+        android.view.SurfaceView sv = findSurface(videoLayout);
+        if (android.os.Build.VERSION.SDK_INT >= 24 && sv != null) {
+            try {
+                final android.graphics.Bitmap bm = android.graphics.Bitmap.createBitmap(sv.getWidth(), sv.getHeight(),
+                        android.graphics.Bitmap.Config.ARGB_8888);
+                android.view.PixelCopy.request(sv, bm, res -> {
+                    if (res == android.view.PixelCopy.SUCCESS) saveShot(bm);
+                    else shotFromFile();
+                }, handler);
+                return;
+            } catch (Throwable ignored) {
+            }
+        }
+        shotFromFile();
+    }
+
+    private void shotFromFile() {
+        final Store.Item it = current();
+        final long t = Math.max(0, mp.getTime());
+        if (it == null || !previewable(it.u)) {
+            osd("📸 " + T.t("Screenshot is not possible for this video"));
+            return;
+        }
+        new Thread(() -> {
+            android.media.MediaMetadataRetriever r2 = new android.media.MediaMetadataRetriever();
+            try {
+                setSource(r2, it.u);
+                android.graphics.Bitmap b = r2.getFrameAtTime(t * 1000, android.media.MediaMetadataRetriever.OPTION_CLOSEST);
+                if (b != null) saveShot(b);
+                else handler.post(() -> osd("📸 " + T.t("Screenshot is not possible for this video")));
+            } catch (Exception e) {
+                handler.post(() -> osd("📸 " + e.getMessage()));
+            } finally {
+                try {
+                    r2.release();
+                } catch (Exception ignored) {
+                }
+            }
+        }).start();
+    }
+
+    private void saveShot(final android.graphics.Bitmap bm) {
+        new Thread(() -> {
+            String name = "TamilCastPlay_" + new java.text.SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new java.util.Date()) + ".jpg";
+            String where = null;
+            try {
+                java.io.File[] st = new java.io.File("/storage").listFiles();
+                if (st != null) for (java.io.File f : st) {
+                    if (f.getName().equals("self") || f.getName().equals("emulated") || !f.canWrite()) continue;
+                    java.io.File d = new java.io.File(f, "TamilCastPlay Screenshots");
+                    //noinspection ResultOfMethodCallIgnored
+                    d.mkdirs();
+                    java.io.File out = new java.io.File(d, name);
+                    try (java.io.FileOutputStream o = new java.io.FileOutputStream(out)) {
+                        bm.compress(android.graphics.Bitmap.CompressFormat.JPEG, 92, o);
+                    }
+                    where = out.getAbsolutePath();
+                    break;
+                }
+                if (where == null && android.os.Build.VERSION.SDK_INT >= 29) {
+                    android.content.ContentValues cv = new android.content.ContentValues();
+                    cv.put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, name);
+                    cv.put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
+                    cv.put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, "Pictures/TamilCastPlay");
+                    Uri u = getContentResolver().insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, cv);
+                    if (u != null) try (java.io.OutputStream o = getContentResolver().openOutputStream(u)) {
+                        bm.compress(android.graphics.Bitmap.CompressFormat.JPEG, 92, o);
+                        where = "Pictures/TamilCastPlay/" + name;
+                    }
+                }
+                if (where == null) {
+                    java.io.File d = getExternalFilesDir(android.os.Environment.DIRECTORY_PICTURES);
+                    java.io.File out = new java.io.File(d, name);
+                    try (java.io.FileOutputStream o = new java.io.FileOutputStream(out)) {
+                        bm.compress(android.graphics.Bitmap.CompressFormat.JPEG, 92, o);
+                    }
+                    where = out.getAbsolutePath();
+                }
+            } catch (Exception e) {
+                where = "error: " + e.getMessage();
+            }
+            final String w = where;
+            handler.post(() -> osd("📸 " + w));
+        }).start();
+    }
+
+    // ---- audio only: picture off, sound keeps playing (also in the background)
+    private boolean audioOnly;
+    private int savedVideoTrack = Integer.MIN_VALUE;
+    private TextView aoLabel;
+
+    private void setAudioOnly(boolean on) {
+        if (mp == null) return;
+        audioOnly = on;
+        if (on) {
+            int vt = mp.getVideoTrack();
+            if (vt >= 0) savedVideoTrack = vt;
+            mp.setVideoTrack(-1);
+            dimView.setAlpha(1f);
+        } else {
+            int vt = savedVideoTrack;
+            if (vt < 0) {
+                MediaPlayer.TrackDescription[] ts = mp.getVideoTracks();
+                if (ts != null) for (MediaPlayer.TrackDescription d : ts) if (d.id >= 0) { vt = d.id; break; }
+            }
+            if (vt >= 0) mp.setVideoTrack(vt);
+            applyBrightnessLayer();
+        }
+        if (aoLabel == null) {
+            aoLabel = text(22, Color.WHITE);
+            aoLabel.setGravity(Gravity.CENTER);
+            aoLabel.setText("🎵  " + T.t("Audio only") + "\n" + T.t("☰ menu → Audio only = show the picture"));
+            root.addView(aoLabel, 2, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER));
+        }
+        aoLabel.setVisibility(on ? View.VISIBLE : View.GONE);
+    }
+
+    // ---- auto frame-rate: switch the TV to the video's frame rate (24p, 25p, 50p…)
+    private void applyAfr() {
+        if (mp == null || android.os.Build.VERSION.SDK_INT < 23) return;
+        WindowManager.LayoutParams lp = getWindow().getAttributes();
+        if (!Store.getBool("afr", false) || channelMode()) {
+            if (lp.preferredDisplayModeId != 0) {
+                lp.preferredDisplayModeId = 0;
+                getWindow().setAttributes(lp);
+            }
+            return;
+        }
+        try {
+            IMedia.Track t = mp.getCurrentVideoTrack();
+            if (!(t instanceof IMedia.VideoTrack)) return;
+            IMedia.VideoTrack v = (IMedia.VideoTrack) t;
+            if (v.frameRateNum <= 0 || v.frameRateDen <= 0) return;
+            float fps = (float) v.frameRateNum / v.frameRateDen;
+            android.view.Display d = getWindowManager().getDefaultDisplay();
+            android.view.Display.Mode cur = d.getMode(), best = null;
+            int bestMult = 99;
+            for (android.view.Display.Mode md : d.getSupportedModes()) {
+                if (md.getPhysicalWidth() != cur.getPhysicalWidth() || md.getPhysicalHeight() != cur.getPhysicalHeight()) continue;
+                float mult = md.getRefreshRate() / fps;
+                int k = Math.round(mult);
+                if (k < 1 || Math.abs(mult - k) > 0.01f * k) continue;
+                if (k < bestMult) {
+                    bestMult = k;
+                    best = md;
+                }
+            }
+            if (best != null && best.getModeId() != cur.getModeId()) {
+                lp.preferredDisplayModeId = best.getModeId();
+                getWindow().setAttributes(lp);
+                osd(String.format(Locale.US, "🎞 %.3f fps → %.2f Hz", fps, best.getRefreshRate()));
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    // ---- preview pictures while seeking
+    private LinearLayout previewBox;
+    private android.widget.ImageView previewImg;
+    private TextView previewTime;
+    private final java.util.concurrent.ExecutorService previewEx = java.util.concurrent.Executors.newSingleThreadExecutor();
+    private android.media.MediaMetadataRetriever mmr;
+    private String mmrUrl;
+    private volatile long previewWant = -1;
+    private volatile boolean previewBusy;
+    private final Runnable previewHide = () -> {
+        if (previewBox != null) previewBox.setVisibility(View.GONE);
+    };
+
+    private static boolean previewable(String u) {
+        return u.startsWith("/") || (u.startsWith("http") && !u.contains("/torrent/") && !u.contains("/local/")
+                && !u.toLowerCase(Locale.ROOT).contains(".m3u8"));
+    }
+
+    private static void setSource(android.media.MediaMetadataRetriever m, String u) {
+        if (u.startsWith("/")) m.setDataSource(u);
+        else {
+            java.util.HashMap<String, String> h = new java.util.HashMap<>();
+            h.put("User-Agent", Net.UA);
+            m.setDataSource(u.split("\\|")[0], h);
+        }
+    }
+
+    private void showPreview(final long ms) {
+        final Store.Item it = current();
+        if (it == null || !previewable(it.u) || mp == null || mp.getLength() <= 0) return;
+        if (previewBox == null) {
+            previewBox = new LinearLayout(this);
+            previewBox.setOrientation(LinearLayout.VERTICAL);
+            previewBox.setGravity(Gravity.CENTER);
+            previewBox.setPadding(dp(4), dp(4), dp(4), dp(4));
+            GradientDrawable g = new GradientDrawable();
+            g.setColor(0xE6000000);
+            g.setStroke(dp(2), Ui.ACCENT);
+            g.setCornerRadius(dp(10));
+            previewBox.setBackground(g);
+            previewImg = new android.widget.ImageView(this);
+            previewImg.setScaleType(android.widget.ImageView.ScaleType.CENTER_CROP);
+            previewBox.addView(previewImg, new LinearLayout.LayoutParams(dp(224), dp(126)));
+            previewTime = text(15, Color.WHITE);
+            previewBox.addView(previewTime);
+            FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+            lp.setMargins(0, 0, 0, dp(200));
+            root.addView(previewBox, lp);
+        }
+        previewBox.setVisibility(View.VISIBLE);
+        previewTime.setText(Net.fmtTime(ms));
+        handler.removeCallbacks(previewHide);
+        handler.postDelayed(previewHide, 1800);
+        previewWant = ms;
+        if (previewBusy) return;
+        previewBusy = true;
+        final String url = it.u;
+        previewEx.execute(() -> {
+            while (true) {
+                long want = previewWant;
+                try {
+                    if (!url.equals(mmrUrl)) {
+                        if (mmr != null) mmr.release();
+                        mmr = new android.media.MediaMetadataRetriever();
+                        setSource(mmr, url);
+                        mmrUrl = url;
+                    }
+                    android.graphics.Bitmap b = mmr.getFrameAtTime(want * 1000, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
+                    if (b != null) {
+                        final android.graphics.Bitmap sb = android.graphics.Bitmap.createScaledBitmap(b, 320,
+                                Math.max(1, 320 * b.getHeight() / Math.max(1, b.getWidth())), true);
+                        handler.post(() -> previewImg.setImageBitmap(sb));
+                    }
+                } catch (Throwable e) {
+                    mmrUrl = null;
+                }
+                if (previewWant == want) {
+                    previewBusy = false;
+                    return;
+                }
+            }
+        });
+    }
+
+    private int prevIndex = -1;
+
+    private void lastChannel() {
+        if (prevIndex >= 0 && prevIndex < queue.size() && prevIndex != index) playIndex(prevIndex, true);
+        else osd(T.t("No previous channel"));
+    }
+
     private void playIndex(int i, boolean resume) {
         if (i < 0 || i >= queue.size() || mp == null) return;
+        if (i != index && index >= 0) prevIndex = index;
+        if (queue.size() > 20) Store.addRecentChannel(queue.get(i).u);
+        skipDone = false;
+        nextShownFor = -1;
         savePosition();
         index = i;
         Store.Item it = queue.get(i);
@@ -1212,6 +1597,8 @@ public class PlayerActivity extends AppCompatActivity {
                 case MediaPlayer.Event.Playing:
                     hideLoading();
                     torrentRetries = 0;
+                    if (audioOnly) handler.postDelayed(() -> { if (mp != null && audioOnly) mp.setVideoTrack(-1); }, 600);
+                    handler.postDelayed(PlayerActivity.this::applyAfr, 1500);
                     applyAudio();
                     applyPicture();
                     handler.postDelayed(new Runnable() {
@@ -1300,6 +1687,7 @@ public class PlayerActivity extends AppCompatActivity {
 
     private void afterEnded() {
         Store.Item it = current();
+        if (it != null) Store.setWatched(it.u, true);
         if (it != null) {
             Store.setPos(it.u, 0);
             Store.removeHistory(it.u);
@@ -1345,7 +1733,10 @@ public class PlayerActivity extends AppCompatActivity {
         boolean nearEnd = pos > len - Math.max(15000, len / 50);
         Store.setPos(it.u, nearEnd ? 0 : pos);
         boolean resumable = !it.u.startsWith("content:") && !it.u.contains("/local/") && len > 60000;
-        if (nearEnd) Store.removeHistory(it.u);
+        if (nearEnd) {
+            Store.removeHistory(it.u);
+            Store.setWatched(it.u, true);
+        }
         else if (resumable && pos > 5000) {
             Store.putHistory(it.t, it.u, pos, len);
             Thumbs.request(this, it.u, pos);
@@ -1363,18 +1754,34 @@ public class PlayerActivity extends AppCompatActivity {
         applyEq();
     }
 
+    /** 0 off, 1 light, 2 medium, 3 strong. The old "Night mode" switch counts as medium. */
+    static int dialogLevel() {
+        int d = Store.getInt("dialog", -1);
+        if (d < 0) d = Store.getBool("night", false) ? 2 : 0;
+        return Math.max(0, Math.min(3, d));
+    }
+
+    // 60 170 310 600 1k 3k 6k 12k 14k 16k Hz: less boom, more voice
+    private static final float[] VOICE = {-3f, -2.5f, -1f, 1f, 2.5f, 3f, 1.5f, 0f, -0.5f, -1f};
+
     private void applyEq() {
         if (mp == null) return;
-        if (!Store.getBool("eq_on", false)) {
+        int dl = dialogLevel();
+        if (!Store.getBool("eq_on", false) && dl == 0) {
             mp.setEqualizer(null);
             return;
         }
         try {
             MediaPlayer.Equalizer eq = MediaPlayer.Equalizer.create();
-            eq.setPreAmp(Store.getFloat("eq_preamp", 0f));
+            boolean user = Store.getBool("eq_on", false);
+            eq.setPreAmp((user ? Store.getFloat("eq_preamp", 0f) : 0f) - (dl > 0 ? dl : 0));
             float[] b = Store.getBands();
             int n = Math.min(b.length, MediaPlayer.Equalizer.getBandCount());
-            for (int i = 0; i < n; i++) eq.setAmp(i, b[i]);
+            float m = dl == 1 ? 0.8f : dl == 2 ? 1.3f : dl == 3 ? 1.9f : 0f;
+            for (int i = 0; i < n; i++) {
+                float v = (user ? b[i] : 0f) + (i < VOICE.length ? VOICE[i] * m : 0f);
+                eq.setAmp(i, Math.max(-20f, Math.min(20f, v)));
+            }
             mp.setEqualizer(eq);
         } catch (Throwable ignored) {
         }
@@ -1570,6 +1977,10 @@ public class PlayerActivity extends AppCompatActivity {
             case KeyEvent.KEYCODE_SPACE:
             case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
             case KeyEvent.KEYCODE_HEADSETHOOK:
+                if (repeat == 0 && chipMode != 0 && !overlayVisible && code != KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) {
+                    chipAction();
+                    return true;
+                }
                 if (repeat == 0) {
                     boolean okKey = code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER
                             || code == KeyEvent.KEYCODE_NUMPAD_ENTER;
@@ -1577,11 +1988,18 @@ public class PlayerActivity extends AppCompatActivity {
                     else togglePause();
                 }
                 return true;
+            case KeyEvent.KEYCODE_BOOKMARK:
+                if (repeat == 0) {
+                    if (channelMode()) menuQueue();
+                    else addBookmark();
+                }
+                return true;
             case KeyEvent.KEYCODE_GUIDE:
             case KeyEvent.KEYCODE_TV:
-            case KeyEvent.KEYCODE_BOOKMARK:
-            case KeyEvent.KEYCODE_LAST_CHANNEL:
                 if (repeat == 0) menuQueue();
+                return true;
+            case KeyEvent.KEYCODE_LAST_CHANNEL:
+                if (repeat == 0) lastChannel();
                 return true;
             case KeyEvent.KEYCODE_MEDIA_PLAY:
                 mp.play();
@@ -1895,6 +2313,27 @@ public class PlayerActivity extends AppCompatActivity {
             labels.add("🔒  " + T.t("Lock screen"));
             acts.add(new Runnable() { public void run() { command("lock", "1", ""); } });
         }
+        labels.add("🔖  " + T.t("Bookmark this scene"));
+        acts.add(new Runnable() { public void run() { addBookmark(); } });
+        if (current() != null && Store.bookmarks(current().u).length() > 0) {
+            labels.add("🔖  " + T.t("Bookmarks") + " · " + Store.bookmarks(current().u).length());
+            acts.add(new Runnable() { public void run() { menuBookmarks(); } });
+        }
+        labels.add("📸  " + T.t("Screenshot"));
+        acts.add(new Runnable() { public void run() { screenshot(); } });
+        labels.add("🎵  " + T.t("Audio only (picture off)") + ": " + T.t(audioOnly ? "On" : "Off"));
+        acts.add(new Runnable() { public void run() { command("audioonly", audioOnly ? "0" : "1", ""); } });
+        labels.add("🗣  " + T.t("Clear dialogue (quiet voices, loud music)") + ": " + dialogName(dialogLevel()));
+        acts.add(new Runnable() { public void run() {
+            String[] n = {dialogName(0), dialogName(1), dialogName(2), dialogName(3)};
+            choose(T.t("Clear dialogue (quiet voices, loud music)"), n, dialogLevel(), new IntCb() {
+                public void on(int i) { command("dialog", String.valueOf(i), ""); }
+            });
+        } });
+        labels.add("📊  " + T.t("Volume levelling") + ": " + T.t(Store.getBool("level", false) ? "On" : "Off"));
+        acts.add(new Runnable() { public void run() { command("level", Store.getBool("level", false) ? "0" : "1", ""); } });
+        labels.add("🎞  " + T.t("Auto frame-rate (smooth 24p)") + ": " + T.t(Store.getBool("afr", false) ? "On" : "Off"));
+        acts.add(new Runnable() { public void run() { command("afr", Store.getBool("afr", false) ? "0" : "1", ""); } });
         labels.add("☀  " + T.t("Brightness: ") + Store.getInt("bright", 100) + "%");
         acts.add(new Runnable() { public void run() {
             stepper(T.t("Brightness: "), Store.getInt("bright", 100), 5, 10, 150, 100, new Fmt() {
@@ -1965,20 +2404,83 @@ public class PlayerActivity extends AppCompatActivity {
         }
         if (sel < 0 && mp.getSpuTrack() < 0) sel = 0;
         final int extra = ids.size();
+        names.add("🔎 " + T.t("Find subtitles online…"));
+        names.add("⚙ " + T.t("Online subtitle settings (languages, API key)"));
         names.add(T.t("➕ Load a subtitle file from your phone…"));
         names.add(T.t("Subtitle delay…"));
         names.add(T.t("Subtitle style…"));
         choose(T.t("Subtitles"), names.toArray(new String[0]), sel, new IntCb() {
             public void on(int i) {
                 if (i < extra) command("sub", String.valueOf(ids.get(i)), "");
-                else if (i == extra) new AlertDialog.Builder(PlayerActivity.this).setTitle(T.t("Load subtitles"))
+                else if (i == extra) findSubsOnline();
+                else if (i == extra + 1) subOnlineSettings();
+                else if (i == extra + 2) new AlertDialog.Builder(PlayerActivity.this).setTitle(T.t("Load subtitles"))
                         .setMessage("On your phone open\n\nhttp://" + Net.ip() + ":" + RemoteService.PORT
                                 + "\n\nthen go to “Audio & Subs” and upload a .srt/.ass file or paste a subtitle link.")
                         .setPositiveButton(T.t("OK"), null).show();
-                else if (i == extra + 1) menuSubDelay();
+                else if (i == extra + 3) menuSubDelay();
                 else menuSubStyle();
             }
         });
+    }
+
+    private void findSubsOnline() {
+        Store.Item it = current();
+        final android.widget.EditText q = new android.widget.EditText(this);
+        q.setSingleLine(true);
+        q.setText(it == null ? "" : SubSearch.cleanTitle(it.t));
+        new AlertDialog.Builder(this).setTitle("🔎 " + T.t("Find subtitles online…")).setView(q)
+                .setPositiveButton(T.t("Search"), (d, w) -> {
+                    final String query = q.getText().toString().trim();
+                    osd("🔎 …");
+                    new Thread(() -> {
+                        try {
+                            final List<SubSearch.Hit> hits = SubSearch.search(query);
+                            handler.post(() -> {
+                                if (hits.isEmpty()) {
+                                    osd(T.t("No subtitles found"));
+                                    return;
+                                }
+                                String[] n = new String[hits.size()];
+                                for (int k = 0; k < n.length; k++) n[k] = SubSearch.label(hits.get(k));
+                                new AlertDialog.Builder(this).setTitle(T.t("Subtitles") + " · " + hits.size())
+                                        .setItems(n, (d2, w2) -> new Thread(() -> {
+                                            try {
+                                                final java.io.File f = SubSearch.download(this, hits.get(w2));
+                                                handler.post(() -> command("subfile", f.getAbsolutePath(), ""));
+                                            } catch (final Exception e) {
+                                                handler.post(() -> osd(e.getMessage()));
+                                            }
+                                        }).start()).show();
+                            });
+                        } catch (final Exception e) {
+                            handler.post(() -> osd(e.getMessage()));
+                        }
+                    }).start();
+                }).setNegativeButton(T.t("Cancel"), null).show();
+    }
+
+    private void subOnlineSettings() {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), 0, dp(20), 0);
+        TextView l1 = new TextView(this);
+        l1.setText(T.t("Languages (codes, comma separated): en, ta, hi, ml, te…"));
+        final android.widget.EditText langs = new android.widget.EditText(this);
+        langs.setText(SubSearch.langs());
+        TextView l2 = new TextView(this);
+        l2.setText(T.t("OpenSubtitles API key (free at opensubtitles.com → API consumers). Optional."));
+        final android.widget.EditText key = new android.widget.EditText(this);
+        key.setText(Store.getStr("os_key", ""));
+        box.addView(l1);
+        box.addView(langs);
+        box.addView(l2);
+        box.addView(key);
+        new AlertDialog.Builder(this).setTitle("⚙ " + T.t("Online subtitle settings (languages, API key)")).setView(box)
+                .setPositiveButton(T.t("Save"), (d, w) -> {
+                    Store.putStr("sub_langs", langs.getText().toString().replace(" ", ""));
+                    Store.putStr("os_key", key.getText().toString().trim());
+                }).setNegativeButton(T.t("Cancel"), null).show();
     }
 
     private void menuAspect() {
@@ -2148,51 +2650,115 @@ public class PlayerActivity extends AppCompatActivity {
     }
 
     /**
-     * Channel / playlist list with live search. Works with the TV remote:
-     * type in the box (on-screen keyboard), press ▼ to go into the list, OK to play.
+     * Channel / playlist list: logos, categories, ★ favourites, 🕘 recent, live search.
+     * TV remote: type in the box, ▼ into the list, OK = play, long-press OK = ★ favourite.
      */
+    private String chFilter = "";   // "" all, "★" favourites, "🕘" recent, else a category
+
     private void menuQueue() {
         if (queue.isEmpty()) return;
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(16), dp(4), dp(16), 0);
+        LinearLayout top = new LinearLayout(this);
+        top.setGravity(Gravity.CENTER_VERTICAL);
         final android.widget.EditText q = new android.widget.EditText(this);
         q.setHint("🔍 " + T.t("Type a channel name…"));
         q.setSingleLine(true);
         q.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH);
-        box.addView(q);
+        top.addView(q, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+        final Button cat = Ui.button(this, "📂", true);
+        top.addView(cat, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(44)));
+        box.addView(top);
         final android.widget.ListView lv = new android.widget.ListView(this);
         final List<Integer> idx = new ArrayList<>();
-        final List<String> names = new ArrayList<>();
-        final android.widget.ArrayAdapter<String> ad = new android.widget.ArrayAdapter<>(this,
-                android.R.layout.simple_list_item_activated_1, names);
-        lv.setAdapter(ad);
-        lv.setChoiceMode(android.widget.ListView.CHOICE_MODE_SINGLE);
-        box.addView(lv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
-                Math.min(dp(420), (int) (getResources().getDisplayMetrics().heightPixels * 0.62f))));
-        final Runnable[] rebuild = new Runnable[1];
-        rebuild[0] = new Runnable() {
-            public void run() {
-                String ql = q.getText().toString().trim().toLowerCase(Locale.ROOT);
-                idx.clear();
-                names.clear();
-                int sel = -1;
-                for (int i = 0; i < queue.size() && idx.size() < 3000; i++) {
-                    if (!ql.isEmpty() && !queue.get(i).t.toLowerCase(Locale.ROOT).contains(ql)) continue;
-                    if (i == index) sel = idx.size();
-                    idx.add(i);
-                    names.add((i == index ? "▶ " : "") + (i + 1) + ".  " + queue.get(i).t);
+        final java.util.Set<String> favs = Store.favs();
+        final List<String> recent = Store.recentChannels();
+        final android.widget.BaseAdapter ad = new android.widget.BaseAdapter() {
+            public int getCount() { return idx.size(); }
+            public Object getItem(int p) { return queue.get(idx.get(p)); }
+            public long getItemId(int p) { return idx.get(p); }
+            public View getView(int p, View cv, ViewGroup parent) {
+                LinearLayout row = (LinearLayout) cv;
+                if (row == null) {
+                    row = new LinearLayout(PlayerActivity.this);
+                    row.setGravity(Gravity.CENTER_VERTICAL);
+                    row.setPadding(dp(8), dp(6), dp(8), dp(6));
+                    android.widget.ImageView iv = new android.widget.ImageView(PlayerActivity.this);
+                    iv.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
+                    row.addView(iv, new LinearLayout.LayoutParams(dp(56), dp(36)));
+                    TextView tv = new TextView(PlayerActivity.this);
+                    tv.setTextSize(16);
+                    tv.setSingleLine(true);
+                    tv.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                    tv.setPadding(dp(12), 0, 0, 0);
+                    row.addView(tv, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+                    TextView g = new TextView(PlayerActivity.this);
+                    g.setTextSize(11);
+                    g.setAlpha(0.6f);
+                    row.addView(g);
                 }
-                ad.notifyDataSetChanged();
-                if (sel >= 0) {
-                    lv.setItemChecked(sel, true);
-                    lv.setSelection(Math.max(0, sel - 3));
-                }
+                int i = idx.get(p);
+                Store.Item it = queue.get(i);
+                ImageLoader.load((android.widget.ImageView) row.getChildAt(0), it.l);
+                ((TextView) row.getChildAt(1)).setText((i == index ? "▶ " : "") + (favs.contains(it.u) ? "★ " : "")
+                        + (i + 1) + ".  " + it.t);
+                ((TextView) row.getChildAt(2)).setText(it.g);
+                return row;
             }
         };
+        lv.setAdapter(ad);
+        box.addView(lv, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                Math.min(dp(440), (int) (getResources().getDisplayMetrics().heightPixels * 0.62f))));
+        final Runnable[] rebuild = new Runnable[1];
+        rebuild[0] = () -> {
+            String ql = q.getText().toString().trim().toLowerCase(Locale.ROOT);
+            idx.clear();
+            int sel = -1;
+            if ("🕘".equals(chFilter)) {
+                for (String u : recent) {
+                    for (int i = 0; i < queue.size(); i++) if (queue.get(i).u.equals(u)) { idx.add(i); break; }
+                }
+            } else {
+                for (int i = 0; i < queue.size() && idx.size() < 4000; i++) {
+                    Store.Item it = queue.get(i);
+                    if ("★".equals(chFilter) && !favs.contains(it.u)) continue;
+                    if (!chFilter.isEmpty() && !"★".equals(chFilter) && !chFilter.equals(it.g)) continue;
+                    if (!ql.isEmpty() && !it.t.toLowerCase(Locale.ROOT).contains(ql)) continue;
+                    if (i == index) sel = idx.size();
+                    idx.add(i);
+                }
+            }
+            cat.setText(chFilter.isEmpty() ? "📂 " + T.t("All") : chFilter.length() <= 2 ? chFilter : "📂 " + chFilter);
+            ad.notifyDataSetChanged();
+            if (sel >= 0) lv.setSelection(Math.max(0, sel - 3));
+        };
+        cat.setOnClickListener(v -> {
+            java.util.LinkedHashMap<String, Integer> g = new java.util.LinkedHashMap<>();
+            for (Store.Item it : queue) if (!it.g.isEmpty()) g.put(it.g, (g.containsKey(it.g) ? g.get(it.g) : 0) + 1);
+            final List<String> keys = new ArrayList<>();
+            List<String> names = new ArrayList<>();
+            keys.add("");
+            names.add("📺 " + T.t("All") + "  ·  " + queue.size());
+            keys.add("★");
+            names.add("★ " + T.t("Favourites") + "  ·  " + favs.size());
+            keys.add("🕘");
+            names.add("🕘 " + T.t("Recent channels"));
+            List<java.util.Map.Entry<String, Integer>> es = new ArrayList<>(g.entrySet());
+            java.util.Collections.sort(es, (x, y) -> y.getValue() - x.getValue());
+            for (java.util.Map.Entry<String, Integer> e : es) {
+                keys.add(e.getKey());
+                names.add("📂 " + e.getKey() + "  ·  " + e.getValue());
+            }
+            new AlertDialog.Builder(this).setTitle("📂 " + T.t("Categories"))
+                    .setItems(names.toArray(new String[0]), (d, w) -> {
+                        chFilter = keys.get(w);
+                        rebuild[0].run();
+                    }).show();
+        });
         q.addTextChangedListener(new android.text.TextWatcher() {
-            public void beforeTextChanged(CharSequence c, int a, int b, int d) { }
-            public void onTextChanged(CharSequence c, int a, int b, int d) { }
+            public void beforeTextChanged(CharSequence c, int a1, int b1, int d) { }
+            public void onTextChanged(CharSequence c, int a1, int b1, int d) { }
             public void afterTextChanged(android.text.Editable e) {
                 rebuild[0].run();
             }
@@ -2201,22 +2767,25 @@ public class PlayerActivity extends AppCompatActivity {
         final AlertDialog d = new AlertDialog.Builder(this)
                 .setTitle(T.t("📺 Channels") + "  ·  " + queue.size())
                 .setView(box).setNegativeButton(T.t("Close"), null).create();
-        lv.setOnItemClickListener(new android.widget.AdapterView.OnItemClickListener() {
-            public void onItemClick(android.widget.AdapterView<?> p, View v, int pos, long id) {
-                d.dismiss();
-                playIndex(idx.get(pos), true);
-            }
+        lv.setOnItemClickListener((p, v, pos, id) -> {
+            d.dismiss();
+            playIndex(idx.get(pos), true);
+        });
+        lv.setOnItemLongClickListener((p, v, pos, id) -> {
+            Store.Item it = queue.get(idx.get(pos));
+            boolean on = Store.toggleFav(it.u);
+            if (on) favs.add(it.u);
+            else favs.remove(it.u);
+            osd(on ? "★ " + T.t("Added to favourites") : "☆ " + T.t("Removed from favourites"));
+            ad.notifyDataSetChanged();
+            return true;
         });
         q.setOnEditorActionListener((v, act, ev) -> {
             lv.requestFocus();
             return false;
         });
         d.show();
-        lv.post(new Runnable() {
-            public void run() {
-                lv.requestFocus();
-            }
-        });
+        lv.post(lv::requestFocus);
     }
 
     // ---- type a channel number on the remote (channel lists) ----
@@ -2415,6 +2984,21 @@ public class PlayerActivity extends AppCompatActivity {
                 case "adelay":
                     Store.putInt("adelay", Math.max(-30000, Math.min(30000, Math.round(Float.parseFloat(v)))));
                     return "Audio delay " + fmtMs(Store.getInt("adelay", 0));
+                case "dialog": {
+                    int dv = Math.max(0, Math.min(3, Integer.parseInt(v)));
+                    Store.putInt("dialog", dv);
+                    Store.putBool("night", dv > 0);
+                    return "🗣 " + T.t("Clear dialogue (quiet voices, loud music)") + ": " + dialogName(dv);
+                }
+                case "night":
+                    Store.putInt("dialog", "1".equals(v) || "true".equals(v) ? 2 : 0);
+                    Store.putBool("night", dialogLevel() > 0);
+                    return "🗣 " + T.t("Clear dialogue (quiet voices, loud music)") + ": " + dialogName(dialogLevel());
+                case "level":
+                case "afr":
+                    Store.putBool(c, "1".equals(v) || "true".equals(v));
+                    return T.t(c.equals("night") ? "Night mode (softer loud scenes)" : c.equals("level") ? "Volume levelling"
+                            : "Auto frame-rate (smooth 24p)") + ": " + T.t(Store.getBool(c, false) ? "On" : "Off");
                 case "bright": {
                     int bv = Math.max(10, Math.min(150, Math.round(Float.parseFloat(v))));
                     Store.putInt("bright", bv);
@@ -2470,6 +3054,32 @@ public class PlayerActivity extends AppCompatActivity {
                 break;
             case "adelay":
                 mp.setAudioDelay(Store.getInt("adelay", 0) * 1000L);
+                break;
+            case "dialog":
+            case "night":
+            case "level":
+                restartEngine();
+                break;
+            case "afr":
+                applyAfr();
+                break;
+            case "audioonly":
+                setAudioOnly("1".equals(v) || (v.isEmpty() && !audioOnly));
+                msg = T.t("Audio only (picture off)") + ": " + T.t(audioOnly ? "On" : "Off");
+                break;
+            case "bmadd":
+                addBookmark();
+                msg = "";
+                break;
+            case "bmjump": {
+                JSONArray bms = current() == null ? new JSONArray() : Store.bookmarks(current().u);
+                int bi = Integer.parseInt(v);
+                if (bi >= 0 && bi < bms.length()) seekTo(bms.optJSONObject(bi).optLong("t"));
+                break;
+            }
+            case "screenshot":
+                screenshot();
+                msg = "";
                 break;
             case "bright": {
                 boolean wasBoost = lastBoost;
@@ -2636,6 +3246,8 @@ public class PlayerActivity extends AppCompatActivity {
         o.put("subs", tracksJson(mp.getSpuTracks(), true));
         o.put("subSel", mp.getSpuTrack());
         o.put("sleep", sleepLabel());
+        o.put("audioOnly", audioOnly);
+        o.put("bookmarks", it == null ? new JSONArray() : Store.bookmarks(it.u));
         o.put("repeat", repeatMode());
         o.put("shuffle", shuffleOn());
         o.put("loading", loadingView.getVisibility() == View.VISIBLE ? loadingView.getText().toString() : "");
@@ -2660,6 +3272,10 @@ public class PlayerActivity extends AppCompatActivity {
         o.put("cache", Store.getInt("cache", 2000));
         o.put("adelay", Store.getInt("adelay", 0));
         o.put("bright", Store.getInt("bright", 100));
+        o.put("night", dialogLevel() > 0);
+        o.put("dialog", dialogLevel());
+        o.put("level", Store.getBool("level", false));
+        o.put("afr", Store.getBool("afr", false));
         o.put("quality", Store.getInt("quality", 0));
         JSONObject eq = new JSONObject();
         eq.put("on", Store.getBool("eq_on", false));

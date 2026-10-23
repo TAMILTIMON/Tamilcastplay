@@ -102,6 +102,7 @@ public class MainActivity extends AppCompatActivity {
     private ArrayAdapter<String> adapter;
     private ListView listView;
     private String current = null;
+    private static boolean askedProfile;
     private String filter = "";
 
     private interface OnDelete {
@@ -183,6 +184,63 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    private final java.util.HashMap<Integer, Integer> rowItem = new java.util.HashMap<>();
+
+    /** Long-press (or hold OK) on a channel / video: edit, favourite, move, delete. */
+    private void editItem(final String pl, final int i) {
+        final List<Store.Item> items = Store.items(pl);
+        if (i >= items.size()) return;
+        final Store.Item it = items.get(i);
+        String[] acts = {"✏ " + T.t("Edit name / link"), (Store.isFav(it.u) ? "☆ " : "★ ") + T.t("Favourite"),
+                "⬆ " + T.t("Move up"), "🗑 " + T.t("Delete")};
+        new androidx.appcompat.app.AlertDialog.Builder(this).setTitle(it.t).setItems(acts, (d, w) -> {
+            if (w == 0) {
+                LinearLayout box = new LinearLayout(this);
+                box.setOrientation(LinearLayout.VERTICAL);
+                box.setPadding(Ui.dp(this, 20), 0, Ui.dp(this, 20), 0);
+                final android.widget.EditText t = new android.widget.EditText(this);
+                t.setText(it.t);
+                final android.widget.EditText u = new android.widget.EditText(this);
+                u.setText(it.u);
+                box.addView(t);
+                box.addView(u);
+                new androidx.appcompat.app.AlertDialog.Builder(this).setTitle(T.t("Edit name / link")).setView(box)
+                        .setPositiveButton(T.t("Save"), (d2, w2) -> {
+                            Store.setItem(pl, i, new Store.Item(t.getText().toString(), u.getText().toString(), it.s, it.g, it.l));
+                            refresh();
+                        }).setNegativeButton(T.t("Cancel"), null).show();
+            } else if (w == 1) {
+                Store.toggleFav(it.u);
+                refresh();
+            } else if (w == 2) {
+                Store.moveItem(pl, i, -1);
+                refresh();
+            } else {
+                Store.delItem(pl, i);
+                refresh();
+            }
+        }).show();
+    }
+
+    private void downloadsDialog() {
+        final List<TorrentDownloads.Dl> l = TorrentDownloads.all();
+        String[] n = new String[l.size()];
+        for (int i = 0; i < n.length; i++) n[i] = (l.get(i).done ? "✅ " : "⬇ ") + l.get(i).name + "\n     " + l.get(i).state;
+        new androidx.appcompat.app.AlertDialog.Builder(this).setTitle("⬇ " + T.t("Downloads"))
+                .setItems(n, (d, w) -> {
+                    final TorrentDownloads.Dl x = l.get(w);
+                    new androidx.appcompat.app.AlertDialog.Builder(this).setTitle(x.name)
+                            .setItems(new String[]{"🗑 " + T.t("Remove from list (keep files)"), "🗑 " + T.t("Remove and delete files")},
+                                    (d2, w2) -> {
+                                        TorrentDownloads.cancel(x.src, w2 == 1);
+                                        refresh();
+                                    }).show();
+                })
+                .setNeutralButton(T.t("Downloads") + " · " + T.t("night only") + ": " + T.t(TorrentDownloads.nightOnly() ? "On" : "Off"),
+                        (d, w) -> Store.putBool("dl_night", !TorrentDownloads.nightOnly()))
+                .setPositiveButton(T.t("Close"), null).show();
+    }
+
     private void askFilter() {
         if (!filter.isEmpty()) {
             filter = "";
@@ -255,6 +313,9 @@ public class MainActivity extends AppCompatActivity {
                 recreate();
             }
         });
+        Button prof = Ui.button(this, narrow ? Family.current().optString("emoji", "🙂") : Family.label(), false);
+        prof.setOnClickListener(v -> Family.choose(this, this::recreate));
+        top.addView(prof);
         top.addView(theme);
         Button gear = Ui.button(this, narrow ? "⚙" : T.t("⚙ Settings"), true);
         gear.setOnClickListener(new View.OnClickListener() {
@@ -330,6 +391,12 @@ public class MainActivity extends AppCompatActivity {
         listView.setAdapter(adapter);
         listView.setDividerHeight(Ui.dp(this, 8));
         listView.setDivider(new android.graphics.drawable.ColorDrawable(0x00000000));
+        listView.setOnItemLongClickListener((parent, view, position, id) -> {
+            Integer it = rowItem.get(position);
+            if (it == null || current == null) return false;
+            editItem(current, it);
+            return true;
+        });
         listView.setOnItemClickListener((parent, view, position, id) -> {
             if (position >= 0 && position < actions.size() && actions.get(position) != null) actions.get(position).run();
         });
@@ -339,6 +406,11 @@ public class MainActivity extends AppCompatActivity {
         refresh();
         updateInfo();
         Perms.firstRun(this);
+        Updater.check(this, true);
+        if (!askedProfile && Family.profiles().size() > 1 && Ui.isTv(this)) {
+            askedProfile = true;
+            Family.choose(this, this::recreate);
+        }
         final String crash = Store.getStr("lastcrash", "");
         if (!crash.isEmpty()) {
             Store.putStr("lastcrash", "");
@@ -357,9 +429,14 @@ public class MainActivity extends AppCompatActivity {
         appsRow.removeAllViews();
         boolean tv = Ui.isTv(this);
         for (final AppsHub.App a : AppsHub.favorites(this)) {
-            addTile(a.name, AppsHub.icon(this, a.pkg), tv, v -> {
-                String m = AppsHub.launch(this, a.pkg);
-                if (!a.installed) android.widget.Toast.makeText(this, m, android.widget.Toast.LENGTH_LONG).show();
+            if (!Family.appAllowed(a.pkg) && Family.isKids() && Store.getBool("kids_hide", true)) continue;
+            addTile((Family.appAllowed(a.pkg) ? "" : "🔒 ") + a.name, AppsHub.icon(this, a.pkg), tv, v -> {
+                Family.Ok go = () -> {
+                    String m = AppsHub.launch(this, a.pkg);
+                    if (!a.installed) android.widget.Toast.makeText(this, m, android.widget.Toast.LENGTH_LONG).show();
+                };
+                if (Family.appAllowed(a.pkg)) go.run();
+                else Family.askPin(this, T.t("This app is locked for the kids profile."), go);
             });
         }
         addTile("＋ Apps", null, tv, v -> editApps());
@@ -440,6 +517,7 @@ public class MainActivity extends AppCompatActivity {
         seen = Store.version;
         rows.clear();
         actions.clear();
+        rowItem.clear();
         if (current == null) {
             header.setText("TamilCastPlay");
             if (Ui.isTv(this) && !Perms.overlayOk(this)) {
@@ -452,6 +530,12 @@ public class MainActivity extends AppCompatActivity {
                 rows.add("🎮   " + T.t("Control the whole TV from the phone") + "  (" + T.t("recommended") + ")");
                 actions.add(() -> Perms.openAccessSettings(this));
             }
+            if (!TorrentDownloads.all().isEmpty()) {
+                int act = 0;
+                for (TorrentDownloads.Dl d : TorrentDownloads.all()) if (!d.done) act++;
+                rows.add("⬇   " + T.t("Downloads") + "  ·  " + act + " " + T.t("active"));
+                actions.add(this::downloadsDialog);
+            }
             rows.add("📊   " + T.t("My TV") + "  ·  " + T.t("storage, memory, speed test"));
             actions.add(() -> startActivity(new Intent(this, TvInfoActivity.class)));
             rows.add(T.t("📁   Local files  ·  USB drive / storage"));
@@ -460,7 +544,17 @@ public class MainActivity extends AppCompatActivity {
                 rows.add(T.t("📱   Remote control a TV"));
                 actions.add(() -> startActivity(new Intent(this, ConnectActivity.class)));
             }
+            rows.add("🎬   " + T.t("Library") + "  ·  " + T.t("movie posters, watched ✓, sort & filter"));
+            actions.add(() -> startActivity(new Intent(this, LibraryActivity.class)));
+            rows.add("🖧   " + T.t("Network folders") + "  ·  PC / NAS (SMB, DLNA)");
+            actions.add(() -> startActivity(new Intent(this, NetworkActivity.class)));
+            int left = Family.minutesLeft();
+            if (left >= 0) {
+                rows.add("⏰   " + Family.label() + " · " + left + " " + T.t("min left today"));
+                actions.add(() -> Family.choose(this, this::recreate));
+            }
             for (final String n : Store.names()) {
+                if (!Family.playlistAllowed(n)) continue;
                 rows.add((Store.RECENT.equals(n) ? "🕘   " : "🎵   ") + n + "   ·   " + Store.count(n));
                 actions.add(() -> {
                     current = n;
@@ -483,6 +577,53 @@ public class MainActivity extends AppCompatActivity {
             }
             header.setText(current);
             final List<Store.Item> items = Store.items(current);
+            final String pl = current;
+            if (!items.isEmpty()) {
+                String st = ChannelScanner.status();
+                rows.add("🩺   " + (ChannelScanner.hasResult(pl) ? T.t("Remove channels that don't work") + " · " + ChannelScanner.dead.get()
+                        : ChannelScanner.running && pl.equals(ChannelScanner.playlist) ? st : T.t("Check channels (find ones that don't work)")));
+                actions.add(() -> {
+                    if (ChannelScanner.hasResult(pl)) {
+                        int n = ChannelScanner.removeDead(pl);
+                        android.widget.Toast.makeText(this, n + " " + T.t("removed"), android.widget.Toast.LENGTH_LONG).show();
+                    } else {
+                        android.widget.Toast.makeText(this, ChannelScanner.start(this, pl), android.widget.Toast.LENGTH_LONG).show();
+                    }
+                    refresh();
+                });
+            }
+            if (!Store.getStr("plsrc_" + pl, "").isEmpty()) {
+                rows.add("🔄   " + T.t("Update channels from link"));
+                actions.add(() -> {
+                    android.widget.Toast.makeText(this, "…", android.widget.Toast.LENGTH_SHORT).show();
+                    new Thread(() -> {
+                        String msg;
+                        try {
+                            List<Store.Item> ch = Store.parseM3u(Net.fetchText(Store.getStr("plsrc_" + pl, "")));
+                            if (ch.isEmpty()) msg = T.t("No channel found");
+                            else {
+                                Store.replaceAll(pl, ch);
+                                msg = ch.size() + " " + T.t("channels updated");
+                            }
+                        } catch (Exception e) {
+                            msg = T.t("Cannot reach the TV").replace("TV", "link");
+                        }
+                        final String m2 = msg;
+                        runOnUiThread(() -> android.widget.Toast.makeText(this, m2, android.widget.Toast.LENGTH_LONG).show());
+                    }).start();
+                });
+            }
+            rows.add("✏   " + T.t("Rename playlist"));
+            actions.add(() -> {
+                final android.widget.EditText e = new android.widget.EditText(this);
+                e.setText(pl);
+                e.setSingleLine(true);
+                new androidx.appcompat.app.AlertDialog.Builder(this).setTitle(T.t("Rename playlist")).setView(e)
+                        .setPositiveButton(T.t("Save"), (d, w) -> {
+                            if (Store.renamePlaylist(pl, e.getText().toString())) current = e.getText().toString().trim();
+                            refresh();
+                        }).setNegativeButton(T.t("Cancel"), null).show();
+            });
             if (!items.isEmpty()) {
                 rows.add("🔍   " + T.t("Search channel / name") + (filter.isEmpty() ? "" : "  “" + filter + "”  ✕") + "   ·   " + items.size());
                 actions.add(this::askFilter);
@@ -493,7 +634,9 @@ public class MainActivity extends AppCompatActivity {
             for (int i = 0; i < items.size(); i++) {
                 if (!fl.isEmpty() && !items.get(i).t.toLowerCase(java.util.Locale.ROOT).contains(fl)) continue;
                 final int idx = i;
-                rows.add((Formats.isTorrent(items.get(i).u) ? "🧲   " : "▶   ") + items.get(i).t);
+                rowItem.put(rows.size(), i);
+                rows.add((Store.isWatched(items.get(i).u) ? "✓ " : "") + (Formats.isTorrent(items.get(i).u) ? "🧲   " : Store.isFav(items.get(i).u) ? "★   " : "▶   ") + items.get(i).t
+                        + (items.get(i).g.isEmpty() ? "" : "   · " + items.get(i).g));
                 actions.add(() -> Remote.play(this, Store.items(current), idx));
             }
             if (items.isEmpty()) {

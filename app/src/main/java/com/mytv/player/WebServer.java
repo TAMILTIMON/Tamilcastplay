@@ -79,6 +79,7 @@ public class WebServer extends NanoHTTPD {
                     List<Store.Item> ch = Formats.maybeList(u) ? readChannelList(u) : null;
                     if (ch != null && !ch.isEmpty()) {
                         int n = Store.addAll(val(p, "playlist"), ch);
+                        Store.putStr("plsrc_" + (val(p, "playlist").isEmpty() ? "My Playlist" : val(p, "playlist")), u);
                         return json(new JSONObject().put("ok", true).put("msg", n + " channels added").toString());
                     }
                     Store.add(val(p, "playlist"), new Store.Item(val(p, "title"), u, val(p, "sub")));
@@ -132,6 +133,7 @@ public class WebServer extends NanoHTTPD {
                     List<Store.Item> l = Store.parseM3u(text);
                     if (l.isEmpty()) return fail("No video links found in that playlist.");
                     int n = Store.addAll(val(p, "playlist"), l);
+                    if (!link.isEmpty()) Store.putStr("plsrc_" + (val(p, "playlist").isEmpty() ? "My Playlist" : val(p, "playlist")), link);
                     return json("{\"ok\":true,\"added\":" + n + "}");
                 }
 
@@ -154,6 +156,87 @@ public class WebServer extends NanoHTTPD {
                     return msg(n + " deleted");
                 }
 
+                case "/backup": {
+                    Response r = newFixedLengthResponse(Response.Status.OK, "application/json", Backup.build(ctx));
+                    r.addHeader("Content-Disposition", "attachment; filename=\"" + Backup.fileName() + "\"");
+                    return r;
+                }
+
+                case "/restore": {
+                    String text = val(p, "text");
+                    if (text.isEmpty() && files.get("file") != null) text = new String(readFile(new File(files.get("file"))), "UTF-8");
+                    if (text.isEmpty()) return fail("Choose a backup file");
+                    return msg(Backup.restore(text));
+                }
+
+                case "/subsearch": {
+                    org.json.JSONArray a = new org.json.JSONArray();
+                    List<SubSearch.Hit> hits = SubSearch.search(val(p, "q"));
+                    for (SubSearch.Hit h : hits) a.put(SubSearch.label(h));
+                    return json(new JSONObject().put("ok", true).put("items", a).toString());
+                }
+
+                case "/subpick": {
+                    int si = Integer.parseInt(val(p, "i"));
+                    List<SubSearch.Hit> hits = SubSearch.last;
+                    if (si < 0 || si >= hits.size()) return fail("Search again");
+                    File f = SubSearch.download(ctx, hits.get(si));
+                    return msg(command("subfile", f.getAbsolutePath(), ""));
+                }
+
+                case "/dl":
+                    if (!Formats.looksPlayable(val(p, "url"))) return fail("Paste a magnet or .torrent link");
+                    return msg(TorrentDownloads.add(ctx, val(p, "url")));
+
+                case "/dllist":
+                    return json(new JSONObject().put("items", TorrentDownloads.json()).put("night", TorrentDownloads.nightOnly()).toString());
+
+                case "/dlcancel":
+                    TorrentDownloads.cancel(val(p, "src"), "1".equals(val(p, "del")));
+                    return msg("Removed from Downloads");
+
+                case "/dlnight":
+                    Store.putBool("dl_night", "1".equals(val(p, "v")));
+                    return msg(TorrentDownloads.nightOnly() ? "Downloads only at night (1–6 AM)" : "Downloads any time");
+
+                case "/otherallow": {
+                    if (SessionWatcher.allowed(ctx)) return msg("Already on");
+                    if (!AdbClient.enabled()) return fail("Turn on the 🔌 Full remote (ADB) first, or TV Settings > Notification access > TamilCastPlay");
+                    String e = SessionWatcher.enableViaAdb(ctx);
+                    return e == null ? msg("✅ The remote now shows videos from other apps") : fail(e);
+                }
+
+                case "/rename":
+                    return Store.renamePlaylist(val(p, "playlist"), val(p, "name")) ? msg("Renamed") : fail("Name already used");
+
+                case "/edit": {
+                    int ei = Integer.parseInt(val(p, "idx"));
+                    List<Store.Item> items = Store.items(val(p, "playlist"));
+                    if (ei < 0 || ei >= items.size()) return fail("Not found");
+                    Store.Item old = items.get(ei);
+                    Store.setItem(val(p, "playlist"), ei, new Store.Item(val(p, "title"), val(p, "url").isEmpty() ? old.u : val(p, "url"),
+                            old.s, old.g, old.l));
+                    return msg("Saved");
+                }
+
+                case "/refreshlist": {
+                    String pl = val(p, "playlist");
+                    String src = Store.getStr("plsrc_" + pl, "");
+                    if (src.isEmpty()) return fail("This playlist has no link to update from");
+                    List<Store.Item> ch = readChannelList(src);
+                    if (ch == null || ch.isEmpty()) return fail("Could not read the list");
+                    Store.replaceAll(pl, ch);
+                    return msg(ch.size() + " channels updated");
+                }
+
+                case "/scan":
+                    if ("remove".equals(val(p, "do"))) return msg(ChannelScanner.removeDead(val(p, "playlist")) + " removed");
+                    if ("status".equals(val(p, "do"))) return msg(ChannelScanner.status());
+                    return msg(ChannelScanner.start(ctx, val(p, "playlist")));
+
+                case "/fav":
+                    return msg(Store.toggleFav(val(p, "url")) ? "★ Favourite" : "☆ Removed");
+
                 case "/delpls": {
                     java.util.List<String> names = new java.util.ArrayList<>();
                     for (String n : val(p, "names").split("\n")) if (!n.trim().isEmpty()) names.add(n.trim());
@@ -165,6 +248,8 @@ public class WebServer extends NanoHTTPD {
                     return ok();
 
                 case "/playlist": {
+                    if (!Family.playlistAllowed(val(p, "playlist"))) return fail("🔒 Locked for the kids profile");
+                    if (Family.minutesLeft() == 0) return fail("⏰ Screen time for today is used up");
                     List<Store.Item> items = Store.items(val(p, "playlist"));
                     if (items.isEmpty()) return fail("That playlist is empty");
                     int idx = 0;
@@ -177,6 +262,7 @@ public class WebServer extends NanoHTTPD {
                 }
 
                 case "/play": {
+                    if (Family.minutesLeft() == 0) return fail("⏰ Screen time for today is used up");
                     String u = val(p, "url");
                     if (!Formats.looksPlayable(u)) return fail("Paste a link first (http://, https://, magnet:, rtsp:// …)");
                     final Store.Item it = new Store.Item(val(p, "title"), u, val(p, "sub"));
@@ -264,6 +350,7 @@ public class WebServer extends NanoHTTPD {
                 case "/launch": {
                     final String pkg = val(p, "pkg");
                     if (pkg.isEmpty()) return fail("No app chosen");
+                    if (!Family.appAllowed(pkg)) return fail("🔒 Locked for the kids profile");
                     if (App.visible == 0 && !Perms.overlayOk(ctx)) {
                         return fail("Open TamilCastPlay on the TV first, or allow “Display over other apps” in its ⚙ Settings");
                     }
@@ -565,12 +652,19 @@ public class WebServer extends NanoHTTPD {
             } catch (Exception ignored) {
             }
         }
-        if (o == null) o = new JSONObject().put("player", false);
+        if (o == null) {
+            o = new JSONObject().put("player", false);
+            JSONObject other = SessionWatcher.info(ctx);
+            if (other != null) o.put("other", other);
+        }
+        o.put("otherAllowed", SessionWatcher.allowed(ctx));
         o.put("device", Discovery.deviceName(ctx));
         o.put("apptheme", Store.getStr("theme", "dark"));
         o.put("lang", Store.getStr("lang", "en"));
         o.put("access", TvAccess.on() || AdbClient.enabled());
         o.put("adb", AdbClient.enabled());
+        o.put("scan", ChannelScanner.status());
+        o.put("profile", Family.label());
         boolean tvDark = !"light".equals(Store.getStr("theme", "dark"));
         int[] pc = Palette.resolve(tvDark);
         o.put("pal", new JSONObject().put("i", Palette.index()).put("custom", Palette.hasCustom()).put("dark", tvDark)
@@ -584,6 +678,10 @@ public class WebServer extends NanoHTTPD {
 
     private String command(final String c, final String v, final String b) throws Exception {
         final PlayerActivity pl = Remote.player;
+        if (pl == null) {
+            String r = SessionWatcher.control(ctx, c, v);
+            if (r != null) return r;
+        }
         if (pl != null) {
             return Remote.call(new Callable<String>() {
                 @Override

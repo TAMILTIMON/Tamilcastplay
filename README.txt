@@ -1,3 +1,82 @@
+TAMILCASTPLAY 2.3.1 — 🗣 Clear dialogue
+======================================
+"Night mode" is now "Clear dialogue" with levels Off / Light / Medium / Strong.
+It works ALL the time while on (not only at night): loud background music and fight
+scenes are squeezed, voices are lifted (voice frequencies up, booming bass down).
+Works together with your own equalizer. Set it once: ☰ menu > 🗣 Clear dialogue,
+phone app 🎚 tab, or browser page Picture/EQ. Old "Night mode On" = Medium.
+
+TAMILCASTPLAY 2.3 — player extras, Library, Network folders, Family
+===================================================================
+Player (☰ menu, phone Remote tab, browser page)
+* Preview pictures above the timeline while you seek (drag, ◀ ▶ on the bar, or
+  swipe sideways) — local / USB / web videos.
+* 🌙 Night mode (loud scenes softer, dialogue clear) and 📊 Volume levelling
+  between channels / videos.
+* 🔖 Bookmarks: "Bookmark this scene" (or the remote's Bookmark key) and jump back
+  later from "Bookmarks". Kept per video and per profile.
+* 📸 Screenshot: saved to a USB drive (TamilCastPlay Screenshots folder), else
+  Pictures/TamilCastPlay.
+* 🎵 Audio only: picture off, sound keeps playing — also when you press Home or
+  the phone screen turns off.
+* 🎞 Auto frame-rate: switches the TV to the movie's rate (23.976 / 24 / 25 / 50 Hz)
+  on TVs that offer those modes.
+* ✓ Watched marks are set automatically when a video ends.
+🎬 Library (TV home)
+* Poster grid of movies from Downloads, USB drives and storage (videos over 40 MB).
+  Posters: picture from the video, or real posters + rating + story with a free
+  TMDB key (🔑 button). Sort: recently added / name / biggest. Show: all / not
+  watched / watched / last 30 days. OK = details, Play / Resume, mark watched.
+🖧 Network folders (TV home)
+* Finds PCs and NAS on the Wi-Fi (Windows file sharing / SMB, DLNA), or add one:
+  address like 192.168.1.10/Movies or \\PC\Movies, optional username / password.
+  Browse folders and play without copying. Long-press a saved server to edit it.
+👨‍👩‍👧 Family
+* Profiles: profile button on the TV home (top bar). Each person has their own
+  Continue watching, favourites, recent channels, positions, watched marks and
+  bookmarks. "Who's watching?" appears at start when there is more than one.
+* Kids profile: parents' PIN; locked playlists and apps are hidden / need the PIN;
+  daily screen-time limit (player stops, "Parents: +30 min" with the PIN); leaving
+  the kids profile needs the PIN. ⚙ Settings > Profiles & kids lock.
+
+TAMILCASTPLAY 2.2 — big update
+=============================
+IPTV
+* Channel list (📺 button / OK on live TV): channel LOGOS, 📂 CATEGORIES (from the
+  list's groups: News, Movies, Kids…), ★ FAVOURITES (long-press / hold OK on a channel),
+  🕘 RECENT channels. "Last channel" remote key jumps back to the previous channel.
+* 🩺 Check channels: open a playlist on the TV home > "Check channels" — checks every
+  channel in the background; then "Remove channels that don't work".
+* Playlists: ✏ rename, 🔄 update channels from link, long-press a channel to edit
+  name / link, ★ favourite, move, delete (TV, phone app and browser page).
+* The iptv-org world list (https://iptv-org.github.io/iptv/index.m3u) is added
+  automatically once on the TV as "IPTV · World (iptv-org)". Rename, edit or delete it
+  like any playlist — once deleted it does not come back.
+Player
+* ⏩ "Skip intro" (first 3 minutes, OK or tap, skips 85 s) and "⏭ Next: … in 15 s"
+  before the end of an episode (OK = play now).
+* 🔎 Online subtitles: Subtitles menu > "Find subtitles online…" (TV, phone, browser).
+  Languages and an optional free OpenSubtitles API key: "Online subtitle settings".
+Torrents
+* ⬇ Download for later (browser magnet links, phone Cast tab, browser page): full
+  download in the background, optional "night only" (1–6 AM). Finished movies go to the
+  "Downloads" playlist and play offline.
+Remote
+* Shows and controls videos playing in OTHER apps (YouTube, Netflix, Prime, Spotify…):
+  title, time bar, play/pause, seek, next. One-time switch: TV ⚙ Settings > "Show other
+  apps' videos on the remote" (switches on by itself when the 🔌 ADB full remote is on).
+Browser
+* Tabs (⧉), history 🕘, recent sites on the start page, bookmarks, clear browsing data
+  (history / cache / cookies / tabs), desktop site, private mode.
+* Magnet / .torrent links: asks "Play now" or "⬇ Download for later".
+App
+* ⬆ Auto-update: the TV checks your GitHub releases (every 12 h, or ⚙ Settings > Check
+  for updates) and installs the new APK — no laptop. The GitHub build now publishes a
+  release automatically (needs the 4 signing secrets). First time Android asks to allow
+  "install unknown apps" for TamilCastPlay.
+* 💾 Backup & restore: ⚙ Settings (TV Download folder / USB) or phone browser page
+  (download / upload the backup file).
+
 TAMILCASTPLAY 2.1 — 📊 My TV
 ===========================
 TV home > "📊 My TV" (also phone remote: Playlist tab > My TV, and browser page: Library tab).

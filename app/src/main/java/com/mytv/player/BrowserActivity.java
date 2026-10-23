@@ -114,7 +114,9 @@ public class BrowserActivity extends AppCompatActivity {
         videosBtn = Ui.button(this, "🎬 0", true);
         videosBtn.setOnClickListener(v -> showVideos());
         tb.addView(videosBtn);
-        tb.addView(small("☆", v -> bookmarks()));
+        tabsBtn = small("⧉1", v -> showTabs());
+        tb.addView(tabsBtn);
+        tb.addView(small("⋮", v -> menu()));
         col.addView(tb);
 
         loading = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
@@ -123,7 +125,8 @@ public class BrowserActivity extends AppCompatActivity {
 
         webBox = new FrameLayout(this);
         web = new WebView(this);
-        webBox.addView(web, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        tabs.add(web);
+        webBox.addView(web, 0, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         if (tv) {
             cursor = new CursorView(this);
             webBox.addView(cursor, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -131,6 +134,17 @@ public class BrowserActivity extends AppCompatActivity {
         col.addView(webBox, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
         setContentView(root);
 
+        configure(web);
+
+        String start = getIntent().getStringExtra(EXTRA_URL);
+        if (start != null && !start.isEmpty()) go(start);
+        else home();
+        if (tv) web.requestFocus();
+    }
+
+    /** All the WebView settings and listeners, for every tab. */
+    @SuppressLint("SetJavaScriptEnabled")
+    private void configure(final WebView web) {
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
@@ -140,7 +154,7 @@ public class BrowserActivity extends AppCompatActivity {
         s.setSupportZoom(true);
         s.setBuiltInZoomControls(true);
         s.setDisplayZoomControls(false);
-        if (tv) s.setUserAgentString(s.getUserAgentString().replace("; wv", ""));
+        applyUa(web);
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, true);
 
@@ -152,9 +166,15 @@ public class BrowserActivity extends AppCompatActivity {
 
             @Override
             public void onPageStarted(WebView v, String url, Bitmap f) {
+                if (v != web) return;
                 found.clear();
                 updateVideos();
                 if (!bar.hasFocus() && !url.startsWith("data:") && !url.startsWith("about:")) bar.setText(url);
+            }
+
+            @Override
+            public void onPageFinished(WebView v, String url) {
+                if (url != null && url.startsWith("http") && !Store.getBool("b_private", false)) addHistory(v.getTitle(), url);
             }
 
             @Override
@@ -197,10 +217,169 @@ public class BrowserActivity extends AppCompatActivity {
             return false;
         });
 
-        String start = getIntent().getStringExtra(EXTRA_URL);
-        if (start != null && !start.isEmpty()) go(start);
-        else home();
-        if (tv) web.requestFocus();
+    }
+
+    // ---------------------------------------------------------------- tabs
+    private final List<WebView> tabs = new ArrayList<>();
+    private Button tabsBtn;
+
+    private void switchTo(WebView w) {
+        if (w == web) return;
+        webBox.removeView(web);
+        web = w;
+        if (w.getParent() == null) webBox.addView(w, 0, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+        bar.setText(w.getUrl() == null || w.getUrl().startsWith("data:") ? "" : w.getUrl());
+        found.clear();
+        updateVideos();
+        tabsBtn.setText("⧉" + tabs.size());
+        w.requestFocus();
+    }
+
+    private void newTab(String url) {
+        WebView w = new WebView(this);
+        configure(w);
+        tabs.add(w);
+        switchTo(w);
+        if (url == null) home();
+        else go(url);
+        tabsBtn.setText("⧉" + tabs.size());
+    }
+
+    private void closeTab(WebView w) {
+        if (tabs.size() <= 1) {
+            w.loadUrl("about:blank");
+            home();
+            return;
+        }
+        int i = tabs.indexOf(w);
+        tabs.remove(w);
+        if (w == web) switchTo(tabs.get(Math.max(0, i - 1)));
+        else webBox.removeView(w);
+        w.destroy();
+        tabsBtn.setText("⧉" + tabs.size());
+    }
+
+    private void showTabs() {
+        final List<String> n = new ArrayList<>();
+        for (WebView w : tabs) {
+            String t = w.getTitle();
+            n.add((w == web ? "▶ " : "") + (t == null || t.isEmpty() || t.startsWith("data:") ? T.t("New tab") : t));
+        }
+        n.add("＋ " + T.t("New tab"));
+        new AlertDialog.Builder(this).setTitle("⧉ " + T.t("Tabs") + " · " + tabs.size())
+                .setItems(n.toArray(new String[0]), (d, w) -> {
+                    if (w == tabs.size()) newTab(null);
+                    else {
+                        final WebView tw = tabs.get(w);
+                        new AlertDialog.Builder(this).setTitle(n.get(w))
+                                .setItems(new String[]{"↗ " + T.t("Open"), "✕ " + T.t("Close tab")}, (d2, w2) -> {
+                                    if (w2 == 0) switchTo(tw);
+                                    else closeTab(tw);
+                                }).show();
+                    }
+                }).show();
+    }
+
+    // ---------------------------------------------------------------- history
+    private void addHistory(String title, String url) {
+        try {
+            org.json.JSONArray a = new org.json.JSONArray(Store.getStr("bhist", "[]"));
+            org.json.JSONArray out = new org.json.JSONArray();
+            out.put(new org.json.JSONObject().put("t", title == null ? url : title).put("u", url).put("w", System.currentTimeMillis()));
+            for (int i = 0; i < a.length() && out.length() < 300; i++) {
+                if (!a.getJSONObject(i).optString("u").equals(url)) out.put(a.getJSONObject(i));
+            }
+            Store.putStr("bhist", out.toString());
+        } catch (Exception ignored) {
+        }
+    }
+
+    private List<String[]> history(int max) {
+        List<String[]> l = new ArrayList<>();
+        try {
+            org.json.JSONArray a = new org.json.JSONArray(Store.getStr("bhist", "[]"));
+            for (int i = 0; i < a.length() && l.size() < max; i++) {
+                l.add(new String[]{a.getJSONObject(i).optString("t"), a.getJSONObject(i).optString("u")});
+            }
+        } catch (Exception ignored) {
+        }
+        return l;
+    }
+
+    private void showHistory() {
+        final List<String[]> h = history(300);
+        if (h.isEmpty()) {
+            Toast.makeText(this, T.t("No history yet"), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String[] n = new String[h.size()];
+        for (int i = 0; i < n.length; i++) n[i] = h.get(i)[0] + "\n" + h.get(i)[1];
+        new AlertDialog.Builder(this).setTitle("🕘 " + T.t("History"))
+                .setItems(n, (d, w) -> web.loadUrl(h.get(w)[1]))
+                .setNeutralButton("🗑 " + T.t("Clear history"), (d, w) -> Store.putStr("bhist", "[]"))
+                .setPositiveButton(T.t("Close"), null).show();
+    }
+
+    private void clearData() {
+        final String[] items = {T.t("History"), T.t("Cached pictures and files"), T.t("Cookies and site data (logs you out of sites)"),
+                T.t("Close all tabs")};
+        final boolean[] on = {true, true, false, false};
+        new AlertDialog.Builder(this).setTitle("🧹 " + T.t("Clear browsing data"))
+                .setMultiChoiceItems(items, on, (d, w, c) -> on[w] = c)
+                .setPositiveButton(T.t("Clear"), (d, w) -> {
+                    if (on[0]) {
+                        Store.putStr("bhist", "[]");
+                        for (WebView t : tabs) t.clearHistory();
+                    }
+                    if (on[1]) {
+                        web.clearCache(true);
+                        android.webkit.WebStorage.getInstance().deleteAllData();
+                    }
+                    if (on[2]) {
+                        CookieManager.getInstance().removeAllCookies(null);
+                        CookieManager.getInstance().flush();
+                        android.webkit.WebStorage.getInstance().deleteAllData();
+                    }
+                    if (on[3]) {
+                        while (tabs.size() > 1) closeTab(tabs.get(tabs.size() - 1));
+                        home();
+                    }
+                    Toast.makeText(this, "🧹 ✅", Toast.LENGTH_SHORT).show();
+                }).setNegativeButton(T.t("Cancel"), null).show();
+    }
+
+    private void menu() {
+        boolean desk = Store.getBool("b_desktop", false), priv = Store.getBool("b_private", false);
+        String[] items = {"＋ " + T.t("New tab"), "⧉ " + T.t("Tabs") + " · " + tabs.size(), "🕘 " + T.t("History"),
+                "☆ " + T.t("Bookmarks"), "🧹 " + T.t("Clear browsing data"),
+                "🖥 " + T.t("Desktop site") + ": " + T.t(desk ? "On" : "Off"),
+                "🕶 " + T.t("Private (no history)") + ": " + T.t(priv ? "On" : "Off"),
+                "🔄 " + T.t("Reload"), "🏠 " + T.t("Go to Home")};
+        new AlertDialog.Builder(this).setItems(items, (d, w) -> {
+            switch (w) {
+                case 0: newTab(null); break;
+                case 1: showTabs(); break;
+                case 2: showHistory(); break;
+                case 3: bookmarks(); break;
+                case 4: clearData(); break;
+                case 5:
+                    Store.putBool("b_desktop", !Store.getBool("b_desktop", false));
+                    for (WebView t : tabs) applyUa(t);
+                    web.reload();
+                    break;
+                case 6: Store.putBool("b_private", !Store.getBool("b_private", false)); break;
+                case 7: web.reload(); break;
+                default: Ui.goHome(this, tv);
+            }
+        }).show();
+    }
+
+    private void applyUa(WebView w) {
+        WebSettings s = w.getSettings();
+        String ua = WebSettings.getDefaultUserAgent(this).replace("; wv", "");
+        if (Store.getBool("b_desktop", false)) ua = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36";
+        s.setUserAgentString(ua);
     }
 
     private Button small(String label, View.OnClickListener l) {
@@ -252,7 +431,16 @@ public class BrowserActivity extends AppCompatActivity {
         for (String[] b : bookmarkList()) {
             h.append("<a href='").append(b[1].replace("'", "%27")).append("'>").append(android.text.Html.escapeHtml(b[0])).append("</a>");
         }
-        h.append("</div><p>").append(T.t("Videos found on a page appear under 🎬. Long-press any link to play it."))
+        h.append("</div>");
+        List<String[]> rec = Store.getBool("b_private", false) ? new ArrayList<String[]>() : history(8);
+        if (!rec.isEmpty()) {
+            h.append("<h1 style='font-size:16px;margin-top:26px'>🕘 ").append(T.t("Recent")).append("</h1><div class=g>");
+            for (String[] b : rec) {
+                h.append("<a href='").append(b[1].replace("'", "%27")).append("'>").append(android.text.Html.escapeHtml(b[0])).append("</a>");
+            }
+            h.append("</div>");
+        }
+        h.append("<p>").append(T.t("Videos found on a page appear under 🎬. Long-press any link to play it."))
                 .append(tv ? " " + T.t("Remote: arrows move the pointer, OK clicks, Menu opens the address bar.") : "")
                 .append("</p></body></html>");
         web.loadDataWithBaseURL("https://tamilcastplay.local/", h.toString(), "text/html", "utf-8", null);
@@ -326,6 +514,32 @@ public class BrowserActivity extends AppCompatActivity {
         final String t = title != null ? title : (web.getTitle() != null && !Formats.isTorrent(url) ? web.getTitle() : Formats.titleFromUrl(url));
         final List<String> labels = new ArrayList<>();
         final List<Runnable> acts = new ArrayList<>();
+        if (Formats.isTorrent(url)) {
+            // magnet / .torrent found: play now or keep for later
+            labels.add("⬇ " + T.t("Download for later") + (tv ? "" : " (" + T.t("on the TV") + ")"));
+            acts.add(() -> {
+                if (tv) Toast.makeText(this, TorrentDownloads.add(this, url), Toast.LENGTH_LONG).show();
+                else {
+                    final String tvIp = Store.getStr("last_tv", "");
+                    if (tvIp.isEmpty()) {
+                        Toast.makeText(this, TorrentDownloads.add(this, url), Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    new Thread(() -> {
+                        String m;
+                        try {
+                            HashMap<String, String> p = new HashMap<>();
+                            p.put("url", url);
+                            m = TvClient.post(tvIp, "/dl", p).optString("msg", "Sent");
+                        } catch (Exception e) {
+                            m = T.t("Cannot reach the TV");
+                        }
+                        final String m2 = m;
+                        main.post(() -> Toast.makeText(this, m2, Toast.LENGTH_LONG).show());
+                    }).start();
+                }
+            });
+        }
         labels.add(T.t(tv ? "▶ Play on this TV" : "▶ Play on this phone"));
         acts.add(() -> {
             List<Store.Item> one = new ArrayList<>();
@@ -353,7 +567,7 @@ public class BrowserActivity extends AppCompatActivity {
         });
         labels.add(T.t("Open link here"));
         acts.add(() -> web.loadUrl(url));
-        new AlertDialog.Builder(this).setTitle(t)
+        new AlertDialog.Builder(this).setTitle((Formats.isTorrent(url) ? "🧲 " + T.t("Torrent found — play or download?") + "\n" : "") + t)
                 .setItems(labels.toArray(new String[0]), (d, w) -> acts.get(w).run()).show();
     }
 
@@ -502,7 +716,7 @@ public class BrowserActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
-        if (web != null) web.destroy();
+        for (WebView w : tabs) w.destroy();
         super.onDestroy();
     }
 

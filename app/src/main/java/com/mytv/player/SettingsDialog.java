@@ -63,8 +63,13 @@ public final class SettingsDialog {
                 T.t("🔓  Allow access to all files (USB, subtitles): ") + (Perms.filesOk() ? T.t("Allowed") : T.t("Not allowed")),
                 "🎮  " + T.t("Control the whole TV from the phone") + ": " + T.t(Perms.accessOk(a) ? "Allowed" : "Not allowed"),
                 "🔌  " + T.t("Full remote for every app (ADB)") + ": " + T.t(AdbClient.enabled() ? "On" : "Off"),
+                "📺  " + T.t("Show other apps' videos on the remote") + ": " + T.t(SessionWatcher.allowed(a) ? "On" : "Off"),
+                "⬇  " + T.t("Downloads") + " · " + T.t("night only") + ": " + T.t(TorrentDownloads.nightOnly() ? "On" : "Off"),
+                "⬆  " + T.t("Check for updates") + " (" + Updater.installedName(a) + ")",
+                "💾  " + T.t("Backup & restore"),
                 "🧲  " + T.t("Torrent storage: ") + String.format(java.util.Locale.US, "%.2f GB", TorrentEngine.cacheBytes(a) / 1073741824.0),
                 T.t("📱  Use as remote for another TV…"),
+                "👨‍👩‍👧  " + T.t("Profiles & kids lock") + ": " + Family.label(),
                 T.t("ℹ  Phone remote address: http://") + Net.ip() + ":" + RemoteService.PORT};
         new AlertDialog.Builder(a).setTitle(T.t("⚙  Settings")).setItems(items, new DialogInterface.OnClickListener() {
             @Override
@@ -200,12 +205,38 @@ public final class SettingsDialog {
                         adbSetup(a);
                         break;
                     case 17:
+                        if (SessionWatcher.allowed(a)) break;
+                        if (AdbClient.enabled()) {
+                            new Thread(() -> {
+                                final String e = SessionWatcher.enableViaAdb(a);
+                                a.runOnUiThread(() -> android.widget.Toast.makeText(a, e == null ? "✅" : e, android.widget.Toast.LENGTH_LONG).show());
+                            }).start();
+                        } else if (!Perms.launchFirst(a, new Intent[]{new Intent("android.settings.ACTION_NOTIFICATION_LISTENER_SETTINGS")})) {
+                            android.widget.Toast.makeText(a, T.t("Turn on the 🔌 Full remote (ADB) first — then this switches on by itself"),
+                                    android.widget.Toast.LENGTH_LONG).show();
+                        }
+                        break;
+                    case 18:
+                        Store.putBool("dl_night", !TorrentDownloads.nightOnly());
+                        show(a);
+                        break;
+                    case 19:
+                        Updater.check(a, false);
+                        break;
+                    case 20:
+                        backupMenu(a);
+                        break;
+                    case 21:
                         new AlertDialog.Builder(a).setTitle("🧲  " + T.t("Torrent storage: "))
                                 .setItems(new String[]{"🗑 Delete saved torrents (keep my kept movies)", "🗑 Delete everything (also kept movies)"},
                                         (d2, w2) -> new Thread(() -> TorrentEngine.get(a).clearCache(w2 == 1)).start()).show();
                         break;
-                    case 18:
+                    case 22:
                         a.startActivity(new Intent(a, ConnectActivity.class));
+                        break;
+                    case 23:
+                        if (Family.isKids()) Family.askPin(a, "", () -> Family.manage(a, a::recreate));
+                        else Family.manage(a, a::recreate);
                         break;
                     default:
                         break;
@@ -232,6 +263,39 @@ public final class SettingsDialog {
                 })
                 .setNeutralButton(T.t("Off"), (d, w) -> Store.putBool("adb_on", false))
                 .setNegativeButton(T.t("Cancel"), null).show();
+    }
+
+    static void backupMenu(final Activity a) {
+        String[] items = {"💾 " + T.t("Save backup to the TV's Download folder"), "♻ " + T.t("Restore from a backup file"),
+                "📱 " + T.t("Tip: the phone app can save / restore backups too (Playlist tab)")};
+        new AlertDialog.Builder(a).setTitle("💾  " + T.t("Backup & restore")).setItems(items, (d, w) -> {
+            if (w == 0) {
+                new Thread(() -> {
+                    String m;
+                    try {
+                        m = "✅ " + Backup.saveToDownloads(a);
+                    } catch (Exception e) {
+                        m = e.getMessage();
+                    }
+                    final String m2 = m;
+                    a.runOnUiThread(() -> android.widget.Toast.makeText(a, m2, android.widget.Toast.LENGTH_LONG).show());
+                }).start();
+            } else if (w == 1) {
+                final java.util.List<java.io.File> fs = Backup.findBackups(a);
+                if (fs.isEmpty()) {
+                    android.widget.Toast.makeText(a, T.t("No backup file found (Download folder or USB). Allow all-files access if it's on USB."),
+                            android.widget.Toast.LENGTH_LONG).show();
+                    return;
+                }
+                String[] n = new String[fs.size()];
+                for (int i = 0; i < n.length; i++) n[i] = fs.get(i).getName() + "  ·  " + fs.get(i).getParent();
+                new AlertDialog.Builder(a).setTitle(T.t("Restore from a backup file")).setItems(n, (d2, w2) -> {
+                    String m = Backup.restoreFile(fs.get(w2));
+                    android.widget.Toast.makeText(a, m, android.widget.Toast.LENGTH_LONG).show();
+                    a.recreate();
+                }).show();
+            }
+        }).show();
     }
 
     /** Restarts the app so every screen uses the new language. */

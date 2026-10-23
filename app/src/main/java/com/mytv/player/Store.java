@@ -15,6 +15,7 @@ import java.util.concurrent.Executors;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Locale;
 
 /** Keeps playlists, resume positions and player settings on the TV. */
@@ -25,11 +26,18 @@ public class Store {
 
     public static class Item {
         public final String t, u, s; // title, url, subtitle url (optional)
+        public final String g, l;    // IPTV: group / category, logo url
 
         public Item(String t, String u, String s) {
+            this(t, u, s, "", "");
+        }
+
+        public Item(String t, String u, String s, String g, String l) {
             this.u = u == null ? "" : u.trim();
             this.t = (t == null || t.trim().isEmpty()) ? Formats.titleFromUrl(this.u) : t.trim();
             this.s = s == null ? "" : s.trim();
+            this.g = g == null ? "" : g.trim();
+            this.l = l == null ? "" : l.trim();
         }
     }
 
@@ -60,7 +68,7 @@ public class Store {
         List<Item> l = new ArrayList<>(it.length());
         for (int j = 0; j < it.length(); j++) {
             JSONObject x = it.getJSONObject(j);
-            l.add(new Item(x.optString("t"), x.optString("u"), x.optString("s", "")));
+            l.add(new Item(x.optString("t"), x.optString("u"), x.optString("s", ""), x.optString("g", ""), x.optString("l", "")));
         }
         return l;
     }
@@ -106,6 +114,8 @@ public class Store {
             Item it = items.get(i);
             JSONObject x = new JSONObject().put("t", it.t).put("u", it.u);
             if (!it.s.isEmpty()) x.put("s", it.s);
+            if (!it.g.isEmpty()) x.put("g", it.g);
+            if (!it.l.isEmpty()) x.put("l", it.l);
             a.put(x);
         }
         return a;
@@ -178,8 +188,8 @@ public class Store {
             String q = query == null ? "" : query.trim().toLowerCase(Locale.ROOT);
             for (int i = Math.max(0, from); i < l.size() && a.length() < max; i++) {
                 Item it = l.get(i);
-                if (!q.isEmpty() && !it.t.toLowerCase(Locale.ROOT).contains(q)) continue;
-                a.put(new JSONObject().put("i", i).put("t", it.t).put("u", it.u));
+                if (!q.isEmpty() && !it.t.toLowerCase(Locale.ROOT).contains(q) && !it.g.toLowerCase(Locale.ROOT).contains(q)) continue;
+                a.put(new JSONObject().put("i", i).put("t", it.t).put("u", it.u).put("g", it.g).put("l", it.l));
             }
             return new JSONObject().put("name", name).put("count", l.size()).put("items", a).toString();
         } catch (Exception e) {
@@ -193,6 +203,90 @@ public class Store {
         if (data.containsKey(RECENT)) l.add(RECENT);
         for (String n : data.keySet()) if (!RECENT.equals(n)) l.add(n);
         return l;
+    }
+
+    public static synchronized boolean renamePlaylist(String from, String to) {
+        to = cleanName(to);
+        if (!data.containsKey(from) || data.containsKey(to)) return false;
+        LinkedHashMap<String, List<Item>> copy = new LinkedHashMap<>();
+        for (Map.Entry<String, List<Item>> e : data.entrySet()) copy.put(e.getKey().equals(from) ? to : e.getKey(), e.getValue());
+        data.clear();
+        data.putAll(copy);
+        saveList(from);           // removes the old file
+        changed(to, true);
+        String src = getStr("plsrc_" + from, "");
+        if (!src.isEmpty()) putStr("plsrc_" + to, src);
+        return true;
+    }
+
+    public static synchronized void setItem(String name, int idx, Item it) {
+        List<Item> l = data.get(name);
+        if (l == null || idx < 0 || idx >= l.size()) return;
+        l.set(idx, it);
+        changed(name, false);
+    }
+
+    /** Replaces all items of a playlist (used by "update channels from link"). */
+    public static synchronized void replaceAll(String name, List<Item> items) {
+        boolean isNew = !data.containsKey(name);
+        List<Item> l = list(name);
+        l.clear();
+        l.addAll(items);
+        changed(name, isNew);
+    }
+
+    /** Category names of a playlist with counts, most channels first. */
+    public static synchronized List<String[]> groups(String name) {
+        Map<String, Integer> m = new LinkedHashMap<>();
+        List<Item> l = data.get(name);
+        if (l != null) for (Item it : l) if (!it.g.isEmpty()) m.put(it.g, (m.containsKey(it.g) ? m.get(it.g) : 0) + 1);
+        List<String[]> out = new ArrayList<>();
+        for (Map.Entry<String, Integer> e : m.entrySet()) out.add(new String[]{e.getKey(), String.valueOf(e.getValue())});
+        java.util.Collections.sort(out, (x, y) -> Integer.parseInt(y[1]) - Integer.parseInt(x[1]));
+        return out;
+    }
+
+    // ---------- favourite & recent channels (by url) ----------
+    private static java.util.Set<String> urlSet(String key) {
+        java.util.Set<String> s = new java.util.LinkedHashSet<>();
+        try {
+            JSONArray a = new JSONArray(getStr(key, "[]"));
+            for (int i = 0; i < a.length(); i++) s.add(a.getString(i));
+        } catch (Exception ignored) {
+        }
+        return s;
+    }
+
+    private static void putUrls(String key, java.util.Collection<String> c) {
+        putStr(key, new JSONArray(new ArrayList<>(c)).toString());
+    }
+
+    public static synchronized boolean isFav(String url) {
+        return urlSet(pk("fav")).contains(url);
+    }
+
+    public static synchronized boolean toggleFav(String url) {
+        java.util.Set<String> s = urlSet(pk("fav"));
+        boolean on = !s.remove(url);
+        if (on) s.add(url);
+        putUrls(pk("fav"), s);
+        return on;
+    }
+
+    public static synchronized java.util.Set<String> favs() {
+        return urlSet(pk("fav"));
+    }
+
+    public static synchronized void addRecentChannel(String url) {
+        List<String> l = new ArrayList<>(urlSet(pk("rch")));
+        l.remove(url);
+        l.add(0, url);
+        while (l.size() > 20) l.remove(l.size() - 1);
+        putUrls(pk("rch"), l);
+    }
+
+    public static synchronized List<String> recentChannels() {
+        return new ArrayList<>(urlSet(pk("rch")));
     }
 
     public static synchronized int count(String name) {
@@ -302,6 +396,51 @@ public class Store {
         if (data.remove(name) != null) changed(name, true);
     }
 
+    // ---------- profiles: each person has own Continue watching, favourites, positions, watched, bookmarks
+    public static String profile() {
+        return getStr("profile", "0");
+    }
+
+    /** Key for the current profile (profile 0 = the original data, so nothing is lost). */
+    public static String pk(String k) {
+        String p = profile();
+        return "0".equals(p) ? k : "p" + p + "_" + k;
+    }
+
+    // ---------- watched marks ----------
+    public static synchronized boolean isWatched(String url) {
+        return urlSet(pk("watched")).contains(url);
+    }
+
+    public static synchronized void setWatched(String url, boolean on) {
+        java.util.Set<String> s = urlSet(pk("watched"));
+        if (on ? s.add(url) : s.remove(url)) putUrls(pk("watched"), s);
+    }
+
+    // ---------- bookmarks inside a video ----------
+    public static synchronized JSONArray bookmarks(String url) {
+        try {
+            return new JSONArray(getStr(pk("bm_" + Thumbs.key(url)), "[]"));
+        } catch (Exception e) {
+            return new JSONArray();
+        }
+    }
+
+    public static synchronized void addBookmark(String url, long ms, String name) {
+        JSONArray a = bookmarks(url);
+        try {
+            a.put(new JSONObject().put("t", ms).put("n", name));
+        } catch (Exception ignored) {
+        }
+        putStr(pk("bm_" + Thumbs.key(url)), a.toString());
+    }
+
+    public static synchronized void delBookmark(String url, int i) {
+        JSONArray a = bookmarks(url), out = new JSONArray();
+        for (int k = 0; k < a.length(); k++) if (k != i) out.put(a.opt(k));
+        putStr(pk("bm_" + Thumbs.key(url)), out.toString());
+    }
+
     // ---------- continue watching ----------
     public static final class Watch {
         public final String t, u;
@@ -319,7 +458,7 @@ public class Store {
     public static synchronized List<Watch> history() {
         List<Watch> out = new ArrayList<>();
         try {
-            JSONArray a = new JSONArray(getStr("history", "[]"));
+            JSONArray a = new JSONArray(getStr(pk("history"), "[]"));
             for (int i = 0; i < a.length(); i++) {
                 JSONObject o = a.getJSONObject(i);
                 out.add(new Watch(o.optString("t"), o.optString("u"), o.optLong("p"), o.optLong("l"), o.optLong("w")));
@@ -335,7 +474,7 @@ public class Store {
             for (Watch w : l) {
                 a.put(new JSONObject().put("t", w.t).put("u", w.u).put("p", w.pos).put("l", w.len).put("w", w.when));
             }
-            putStr("history", a.toString());
+            putStr(pk("history"), a.toString());
             version++;
         } catch (Exception ignored) {
         }
@@ -361,13 +500,59 @@ public class Store {
         if (changed) saveHistory(l);
     }
 
+    // ---------- backup ----------
+    private static final java.util.Set<String> NO_BACKUP = new java.util.HashSet<>(java.util.Arrays.asList(
+            "tokens", "lastcrash", "adb_on", "upd_last", "history"));
+
+    public static JSONObject exportSettings() throws Exception {
+        JSONObject o = new JSONObject();
+        for (Map.Entry<String, ?> e : setPrefs.getAll().entrySet()) {
+            if (NO_BACKUP.contains(e.getKey()) || e.getKey().startsWith("tok_")) continue;
+            Object v = e.getValue();
+            String t = v instanceof Integer ? "i" : v instanceof Long ? "l" : v instanceof Boolean ? "b" : v instanceof Float ? "f" : "s";
+            o.put(e.getKey(), new JSONObject().put("t", t).put("v", String.valueOf(v)));
+        }
+        return o;
+    }
+
+    public static void importSettings(JSONObject o) {
+        SharedPreferences.Editor ed = setPrefs.edit();
+        java.util.Iterator<String> ks = o.keys();
+        while (ks.hasNext()) {
+            String k = ks.next();
+            JSONObject x = o.optJSONObject(k);
+            if (x == null) continue;
+            String v = x.optString("v");
+            try {
+                switch (x.optString("t")) {
+                    case "i": ed.putInt(k, Integer.parseInt(v)); break;
+                    case "l": ed.putLong(k, Long.parseLong(v)); break;
+                    case "b": ed.putBoolean(k, Boolean.parseBoolean(v)); break;
+                    case "f": ed.putFloat(k, Float.parseFloat(v)); break;
+                    default: ed.putString(k, v);
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        ed.apply();
+        version++;
+    }
+
+    public static long getLong(String k, long d) {
+        return setPrefs == null ? d : setPrefs.getLong(k, d);
+    }
+
+    public static void putLong(String k, long v) {
+        if (setPrefs != null) setPrefs.edit().putLong(k, v).apply();
+    }
+
     // ---------- resume positions ----------
     public static long pos(String url) {
-        return posPrefs == null ? 0 : posPrefs.getLong(url, 0);
+        return posPrefs == null ? 0 : posPrefs.getLong(pk(url), 0);
     }
 
     public static void setPos(String url, long p) {
-        if (posPrefs != null) posPrefs.edit().putLong(url, p).apply();
+        if (posPrefs != null) posPrefs.edit().putLong(pk(url), p).apply();
     }
 
     // ---------- settings ----------
@@ -445,13 +630,17 @@ public class Store {
         return out;
     }
 
+    private static final java.util.regex.Pattern GROUP =
+            java.util.regex.Pattern.compile("group-title=\"([^\"]*)\"", java.util.regex.Pattern.CASE_INSENSITIVE);
+    private static final java.util.regex.Pattern LOGO =
+            java.util.regex.Pattern.compile("tvg-logo=\"([^\"]*)\"", java.util.regex.Pattern.CASE_INSENSITIVE);
     private static final java.util.regex.Pattern ATTR =
             java.util.regex.Pattern.compile("(http-user-agent|http-referrer|http-referer)=\"([^\"]*)\"", java.util.regex.Pattern.CASE_INSENSITIVE);
 
     /** Reads an M3U playlist (IPTV lists too), or a plain list of links, one per line. */
     public static List<Item> parseM3u(String text) {
         List<Item> out = new ArrayList<>();
-        String title = null, ua = null, ref = null;
+        String title = null, ua = null, ref = null, group = "", logo = "";
         for (String raw : text.split("\\r?\\n")) {
             String line = raw.trim();
             if (line.isEmpty()) continue;
@@ -459,7 +648,12 @@ public class Store {
             if (line.startsWith("#EXTINF")) {
                 int c = line.lastIndexOf(',');
                 title = c >= 0 ? line.substring(c + 1).trim() : null;
-                java.util.regex.Matcher m = ATTR.matcher(c >= 0 ? line.substring(0, c) : line);
+                String head = c >= 0 ? line.substring(0, c) : line;
+                java.util.regex.Matcher gm = GROUP.matcher(head);
+                group = gm.find() ? gm.group(1).split(";")[0].trim() : "";
+                java.util.regex.Matcher lm = LOGO.matcher(head);
+                logo = lm.find() ? lm.group(1).trim() : "";
+                java.util.regex.Matcher m = ATTR.matcher(head);
                 while (m.find()) {
                     if (m.group(1).toLowerCase(Locale.ROOT).contains("agent")) ua = m.group(2);
                     else ref = m.group(2);
@@ -479,10 +673,12 @@ public class Store {
                     if (ua != null) h.append(ref != null ? "&" : "").append("User-Agent=").append(android.net.Uri.encode(ua));
                     u = u + h;
                 }
-                out.add(new Item(title, u, ""));
+                out.add(new Item(title, u, "", group, logo));
                 title = null;
                 ua = null;
                 ref = null;
+                group = "";
+                logo = "";
             }
         }
         return out;

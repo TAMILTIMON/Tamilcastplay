@@ -161,7 +161,9 @@ label.sw{display:flex;align-items:center;gap:10px;font-size:14px;margin:6px 0}
       <button class="g ic" onclick="cmd('next')">⏭</button>
     </div>
     <div class="ctr"><button class="g" onclick="cmd('jump',-30000)">−30s</button><button class="g" onclick="cmd('stop')">⏹ Stop</button><button class="g" onclick="cmd('jump',30000)">+30s</button></div>
+    <div class="ctr"><button class="g" onclick="cmd('bmadd')" title="Bookmark this scene">🔖</button><button class="g" onclick="bmList()">🔖…</button><button class="g" onclick="cmd('screenshot')" title="Screenshot">📸</button><button class="g" onclick="cmd('audioonly')" title="Audio only">🎵</button></div>
     <div class="ctr"><button class="g" id="rep" onclick="cmd('repeat')">🔁 Repeat: Off</button><button class="g" id="shuf" onclick="cmd('shuffle')">🔀 Shuffle: Off</button></div>
+    <button class="g w" id="otherbtn" style="display:none;margin-top:8px" onclick="post('/otherallow',{}).then(r=>toast(r.msg))">📺 Show other apps' videos (YouTube, Netflix…) here</button>
     <div id="torbox" style="display:none"><div class="bar"><i id="torbar"></i></div><div class="dim" id="tor" style="margin-top:6px"></div></div>
   </div>
 
@@ -219,6 +221,8 @@ label.sw{display:flex;align-items:center;gap:10px;font-size:14px;margin:6px 0}
     <input type="file" id="subfile" accept=".srt,.ass,.ssa,.vtt,.sub,.idx,.smi,.txt,.zip,.gz">
     <button class="w" onclick="upload('/subupload','subfile')">⬆ Send file to TV</button>
     <div style="height:12px"></div>
+    <div class="row" style="margin-bottom:10px"><input id="subq" placeholder="🔎 Find subtitles online (movie name)" style="margin:0"><button onclick="subFind()">🔎</button></div>
+    <div id="subres"></div>
     <input id="suburl" placeholder="…or paste a subtitle link (.srt / .zip / .gz)">
     <button class="g w" onclick="subUrl()">Load from link</button>
   </div>
@@ -253,6 +257,10 @@ label.sw{display:flex;align-items:center;gap:10px;font-size:14px;margin:6px 0}
     <div class="dim">Sleep timer <span id="sleepv"></span></div><select id="sleep" onchange="cmd('sleep',this.value)"></select>
     <div class="dim">Decoder</div><select id="hw" onchange="cmd('hw',this.value)"><option value="0">Hardware (auto, best)</option><option value="1">Software (if picture is green/broken)</option></select>
     <div class="dim">Network buffer</div><select id="cache" onchange="cmd('cache',this.value)"></select>
+    <div class="dim">🗣 Clear dialogue (quiet voices, loud music) — works all the time while on</div>
+    <select id="dialog" onchange="cmd('dialog',this.value)"><option value="0">Off</option><option value="1">Light boost</option><option value="2">Medium boost</option><option value="3">Strong boost</option></select>
+    <label class="sw"><input type="checkbox" id="level" onchange="cmd('level',this.checked?1:0)"> 📊 Volume levelling between channels</label>
+    <label class="sw"><input type="checkbox" id="afr" onchange="cmd('afr',this.checked?1:0)"> 🎞 Auto frame-rate (smooth 24p)</label>
     <div class="dim">Streaming quality (saves data on IPTV / HLS)</div>
     <select id="qual" onchange="cmd('quality',this.value)"><option value="0">Best</option><option value="1080">1080p</option><option value="720">720p</option><option value="480">480p</option><option value="360">360p (saves most data)</option></select>
   </div>
@@ -292,7 +300,7 @@ label.sw{display:flex;align-items:center;gap:10px;font-size:14px;margin:6px 0}
     <textarea id="purl" rows="3" placeholder="Video link, stream (m3u8, mpd, rtsp…), magnet:?xt=… or .torrent link"></textarea>
     <input id="ptitle" placeholder="Title (optional)">
     <input id="psub" placeholder="Subtitle link (optional)">
-    <div class="btns"><button onclick="playNow('now')">▶ Play on TV</button><button class="g" onclick="playNow('queue')">+ Queue</button></div>
+    <div class="btns"><button onclick="playNow('now')">▶ Play on TV</button><button class="g" onclick="playNow('queue')">+ Queue</button><button class="g" onclick="post('/dl',{url:$('purl').value}).then(r=>{toast(r.msg);dlList();})">⬇ Later</button></div>
     <div class="row" style="margin-top:10px"><input id="ppl" list="pls" placeholder="Playlist name" style="margin:0"><button class="g" onclick="saveLink()">💾</button></div>
   </div>
   <div class="card">
@@ -301,6 +309,8 @@ label.sw{display:flex;align-items:center;gap:10px;font-size:14px;margin:6px 0}
     <div class="dim" id="tor2" style="margin-top:10px">No torrent running</div>
     <button class="del" onclick="post('/torrentstop',{}).then(r=>toast(r.msg))" style="margin-top:10px">Stop &amp; delete data</button>
     <div class="dim" id="tcache" style="margin-top:10px"></div>
+    <div class="sec" style="margin-top:14px">⬇ Downloads <label class="sw" style="margin:0;text-transform:none;letter-spacing:0"><input type="checkbox" id="dlnight" onchange="post('/dlnight',{v:this.checked?1:0}).then(r=>toast(r.msg))"> night only</label></div>
+    <div id="dllist" class="dim">—</div>
     <div class="btns" style="margin-top:6px"><button class="g" onclick="cacheInfo()">💾 Storage used</button><button class="del" onclick="if(confirm('Delete saved torrents? (kept movies stay)'))post('/torrentcache',{do:'clear'}).then(r=>toast(r.msg))">🗑 Clear saved</button></div>
   </div>
   <div class="card">
@@ -323,6 +333,12 @@ label.sw{display:flex;align-items:center;gap:10px;font-size:14px;margin:6px 0}
     <button class="w" onclick="add()">Add</button>
   </div>
   <div id="lists"></div>
+  <div class="card">
+    <div class="sec">💾 Backup &amp; restore</div>
+    <div class="btns"><button onclick="location.href='/backup?t='+TOK">💾 Download backup</button></div>
+    <input type="file" id="restfile" accept=".json" style="margin-top:10px">
+    <button class="g w" onclick="if(confirm('Restore playlists and settings from this backup?'))upload('/restore','restfile')">♻ Restore backup</button>
+  </div>
   <div class="card">
     <div class="sec">📊 My TV</div>
     <pre id="tvrep" style="white-space:pre-wrap;font-size:12px;line-height:1.35;margin:0 0 10px;color:var(--text)">Tap Refresh</pre>
@@ -506,6 +522,8 @@ function applyPal(){
   else ['--bg','--bg2','--glass','--glass2','--bar','--text','--dim'].forEach(v=>st.removeProperty(v));
 }
 function render(){
+  if(!S.player&&S.other){const o=S.other;S.player=true;S.title='📺 '+o.app+' · '+o.title+(o.artist?' — '+o.artist:'');S.pos=o.pos;S.len=o.len;S.playing=o.playing;}
+  if($('otherbtn'))$('otherbtn').style.display=S.otherAllowed===false?'block':'none';
   applyPal();
   if(O&&O.palettes)fill('palsel',O.palettes.map((n,i)=>[String(i),n]),S.pal?String(S.pal.i):'0');
   const p=S.player;
@@ -517,6 +535,9 @@ function render(){
   $('pp').textContent=p&&S.playing?'❚❚':'▶';
   $('acchint').style.display=S.access===false?'block':'none';
   $('adbbtn').style.display=S.adb===false?'block':'none';
+  setVal($('dialog'),String(S.dialog||0));$('level').checked=!!S.level;$('afr').checked=!!S.afr;
+  if(S.profile)$('devname').textContent=(S.device||'TV')+' · '+S.profile;
+  if(S.scan)$('tor').textContent=S.scan;
   setVal($('bright'),S.bright||100);if(!busy($('bright')))$('brv').textContent=(S.bright||100)+'%'+((S.bright||100)>100?' (boost)':'');
   setVal($('qual'),String(S.quality||0));
   const RN=['Off','One','All'];
@@ -638,7 +659,13 @@ function renderLists(pls){
     const sm=document.createElement('button');sm.className='g';sm.textContent='☑';sm.title=tr('Select');sm.style.padding='7px 12px';
     const dp=document.createElement('button');dp.textContent='🗑';dp.className='del';
     dp.onclick=async()=>{if(confirm(tr('Delete playlist')+' '+p.name+'?')){await post('/delpl',{playlist:p.name});load();}};
-    bx.appendChild(pp);bx.appendChild(sm);bx.appendChild(dp);h.appendChild(ht);h.appendChild(bx);c.appendChild(h);
+    const tools=document.createElement('button');tools.className='g';tools.textContent='⚙';tools.style.padding='7px 12px';
+    tools.onclick=async()=>{const ch=prompt('1 = rename\n2 = update channels from link\n3 = check channels (find dead)\n4 = remove dead channels found','');
+      if(ch==='1'){const n=prompt('New name',p.name);if(n){const r=await post('/rename',{playlist:p.name,name:n});toast(r.msg);load();}}
+      else if(ch==='2'){toast('…');const r=await post('/refreshlist',{playlist:p.name});toast(r.msg);load();}
+      else if(ch==='3'){const r=await post('/scan',{playlist:p.name});toast(r.msg);}
+      else if(ch==='4'){const r=await post('/scan',{playlist:p.name,do:'remove'});toast(r.msg);load();}};
+    bx.appendChild(pp);bx.appendChild(sm);bx.appendChild(tools);bx.appendChild(dp);h.appendChild(ht);h.appendChild(bx);c.appendChild(h);
     // search (every playlist)
     const sr=document.createElement('input');sr.placeholder='🔍 '+tr('Search channel / name')+'…';sr.style.margin='4px 0 6px';
     let tmo=null;sr.oninput=()=>{clearTimeout(tmo);tmo=setTimeout(()=>{st.q=sr.value.trim();st.all=false;st.sel.clear();st.except.clear();updBar();pageList(st,0,true);},300);};
@@ -695,6 +722,8 @@ function renderItems(st,items){
     if(/\.(m3u8?|pls)(\?|\||$)/i.test(it.u)){const ex=document.createElement('button');ex.textContent='📥 '+tr('Channels');ex.className='g';ex.title=tr('Load all channels of this list');
       ex.onclick=async()=>{toast(tr('Loading channels…'));const r=await post('/expand',{playlist:st.name,idx:i});toast(r.msg);load();};row.appendChild(ex);}
     const b=document.createElement('button');b.textContent='✕';b.className='del';b.onclick=async()=>{await post('/del',{playlist:st.name,idx:i});load();};
+    s.ondblclick=async()=>{const t=prompt('Name',it.t);if(t===null)return;const u=prompt('Link',it.u);if(u===null)return;const r=await post('/edit',{playlist:st.name,idx:i,title:t,url:u});toast(r.msg);load();};
+    const fv=document.createElement('button');fv.textContent='★';fv.className='g';fv.title='Favourite';fv.onclick=async()=>{const r=await post('/fav',{url:it.u});toast(r.msg);};row.appendChild(fv);
     row.insertBefore(ck,row.firstChild);row.insertBefore(s,ck.nextSibling);row.appendChild(pl);row.appendChild(b);
     const more=st.list.querySelector('.more');st.list.insertBefore(row,more);
   });
@@ -740,6 +769,16 @@ $('qsearch').addEventListener('input',()=>{clearTimeout(qt);qt=setTimeout(async(
 async function saveQueue(){const n=prompt(tr('Playlist name'),'IPTV');if(n===null)return;const r=await post('/savequeue',{playlist:n||'IPTV'});toast(r.msg);load();}
 async function typeText(){const t=$('typebox').value;if(!t)return;const r=await post('/type',{text:t});toast(r.msg);$('typebox').value='';}
 async function cacheInfo(){const d=await (await api('/torrentcache')).json();$('tcache').textContent='💾 '+(d.bytes/1073741824).toFixed(2)+' GB used by saved torrents';}
+async function subFind(){const q=$('subq').value.trim()||(S.title||'');toast('🔎 …');const d=await (await api('/subsearch?q='+encodeURIComponent(q))).json();
+  const box=$('subres');box.innerHTML='';if(!d.items||!d.items.length){toast(d.msg||'No subtitles found');return;}
+  d.items.forEach((t,i)=>{const e=document.createElement('div');e.className='q';e.textContent=t;e.onclick=async()=>{const r=await post('/subpick',{i:i});toast(r.msg);box.innerHTML='';};box.appendChild(e);});}
+async function dlList(){try{const d=await (await api('/dllist')).json();$('dlnight').checked=d.night;const box=$('dllist');box.innerHTML='';
+  if(!d.items.length){box.textContent='—';return;}
+  d.items.forEach(x=>{const e=document.createElement('div');e.className='it';const s=document.createElement('span');s.textContent=(x.done?'✅ ':'⬇ ')+x.name+' · '+x.state;
+    const b=document.createElement('button');b.className='del';b.textContent='✕';b.onclick=async()=>{await post('/dlcancel',{src:x.src,del:0});dlList();};e.appendChild(s);e.appendChild(b);box.appendChild(e);});}catch(e){}}
+setInterval(()=>{if(curTab==='cast')dlList();},5000);
+function bmList(){const b=S.bookmarks||[];if(!b.length){toast('🔖 none yet');return;}
+  const n=prompt(b.map((x,i)=>(i+1)+'. '+fmt(x.t)).join('\n')+'\n\nJump to number:','1');if(n)cmd('bmjump',parseInt(n)-1);}
 async function tvInfo(){try{const d=await (await api('/tvinfo')).json();$('tvrep').textContent=d.report;$('tvline').textContent=d.line||'';if(d.testing)setTimeout(tvInfo,1500);}catch(e){}}
 async function tvTest(t){const r=await post('/tvtest',{t:t});toast(r.msg);setTimeout(tvInfo,1200);}
 async function tvBrowse(){const r=await post('/browse',{url:$('burl').value.trim()});toast(r.msg);}
