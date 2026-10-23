@@ -22,6 +22,7 @@
     <uses-feature android:name="android.software.leanback" android:required="false" />
 
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.KILL_BACKGROUND_PROCESSES" />
 
     <!-- Needed on Android 11+ to see and open other apps (Netflix, JioHotstar, Spotify, SonyLIV…) -->
     <queries>
@@ -78,6 +79,10 @@
 
         <activity
             android:name=".FileBrowserActivity"
+            android:exported="false" />
+
+        <activity
+            android:name=".TvInfoActivity"
             android:exported="false" />
 
         <!-- "Share" any link / video / song / .torrent from another phone app -> play on the TV -->

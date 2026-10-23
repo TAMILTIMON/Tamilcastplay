@@ -394,6 +394,36 @@ public class WebServer extends NanoHTTPD {
                     return msg("Torrent stopped and its data deleted");
                 }
 
+                case "/tvinfo":
+                    return json(TvInfo.json(ctx).toString());
+
+                case "/tvtest": {
+                    if (TvInfo.busy()) return fail("A test is already running");
+                    final String t = val(p, "t");
+                    new Thread(() -> {
+                        if ("disk".equals(t)) TvInfo.diskTest(ctx, null);
+                        else if ("bench".equals(t)) TvInfo.benchmark(null);
+                        else TvInfo.speedTest(null);
+                    }).start();
+                    return msg("Test started on the TV…");
+                }
+
+                case "/tvclean":
+                    return msg(TvInfo.clean(ctx));
+
+                case "/tvapps": {
+                    if (!AdbClient.enabled()) return fail("Turn on the 🔌 Full remote (ADB) first");
+                    org.json.JSONArray a = new org.json.JSONArray();
+                    for (TvInfo.Proc pr : TvInfo.running(ctx)) {
+                        a.put(new JSONObject().put("name", pr.name).put("label", AppsHub.label(ctx, pr.name.split(":")[0]))
+                                .put("mem", TvInfo.gb(pr.rss)));
+                    }
+                    return json(new JSONObject().put("ok", true).put("apps", a).toString());
+                }
+
+                case "/tvstop":
+                    return msg(TvInfo.forceStop(ctx, val(p, "name")));
+
                 case "/torrentcache": {
                     final TorrentEngine te = TorrentEngine.get(ctx);
                     if ("clear".equals(val(p, "do")) || "all".equals(val(p, "do"))) {

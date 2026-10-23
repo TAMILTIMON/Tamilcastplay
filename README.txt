@@ -1,3 +1,20 @@
+TAMILCASTPLAY 2.1 — 📊 My TV
+===========================
+TV home > "📊 My TV" (also phone remote: Playlist tab > My TV, and browser page: Library tab).
+* Storage: used / free for internal, shared and every USB / SD drive, plus how much
+  the saved torrents use.
+* Memory (RAM): used / free, low-memory warning, how much TamilCastPlay uses.
+* Processor: chip name, cores, max speed, live speed of each core, temperature.
+* Screen: resolution, refresh rate, panel max, HDR types (HDR10, HLG, Dolby Vision).
+* Video support: hardware H.264 / HEVC / VP9 / AV1 / Dolby Vision, Dolby & DTS audio.
+* Network: Wi-Fi 2.4/5 GHz, signal, link speed or Ethernet, IP address.
+* Tests: Internet speed (ping, download, upload, with "good for 4K/1080p/720p"),
+  Storage speed (write/read MB/s), CPU score + RAM speed (Android does not report
+  RAM MHz, so it is measured).
+* 🧹 Free up memory: closes background apps (with the 🔌 ADB full remote it also
+  stops all background apps and clears caches). 📋 Running apps (needs ADB): list
+  with memory use, tap one to stop it.
+
 TAMILCASTPLAY 2.0 — brightness, torrent cache, quality, full remote
 ====================================================================
 * ☀ Brightness on the TV picture: phone remote (Remote tab, under Volume), browser

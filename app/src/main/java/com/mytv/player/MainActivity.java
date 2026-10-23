@@ -452,6 +452,8 @@ public class MainActivity extends AppCompatActivity {
                 rows.add("🎮   " + T.t("Control the whole TV from the phone") + "  (" + T.t("recommended") + ")");
                 actions.add(() -> Perms.openAccessSettings(this));
             }
+            rows.add("📊   " + T.t("My TV") + "  ·  " + T.t("storage, memory, speed test"));
+            actions.add(() -> startActivity(new Intent(this, TvInfoActivity.class)));
             rows.add(T.t("📁   Local files  ·  USB drive / storage"));
             actions.add(() -> startActivity(new Intent(this, FileBrowserActivity.class)));
             if (!Ui.isTv(this)) {

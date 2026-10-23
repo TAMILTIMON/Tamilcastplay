@@ -324,6 +324,13 @@ label.sw{display:flex;align-items:center;gap:10px;font-size:14px;margin:6px 0}
   </div>
   <div id="lists"></div>
   <div class="card">
+    <div class="sec">📊 My TV</div>
+    <pre id="tvrep" style="white-space:pre-wrap;font-size:12px;line-height:1.35;margin:0 0 10px;color:var(--text)">Tap Refresh</pre>
+    <div class="dim" id="tvline" style="color:var(--acc);font-weight:600"></div>
+    <div class="btns" style="margin-top:8px"><button onclick="tvInfo()">🔄 Refresh</button><button onclick="tvTest('speed')">🌐 Speed test</button><button onclick="post('/tvclean',{}).then(r=>{toast(r.msg);tvInfo();})">🧹 Free memory</button></div>
+    <div class="btns" style="margin-top:6px"><button class="g" onclick="tvTest('disk')">💾 Storage speed</button><button class="g" onclick="tvTest('bench')">⚙ CPU / RAM speed</button></div>
+  </div>
+  <div class="card">
     <div class="sec">This page</div>
     <label class="sw"><input type="checkbox" id="autohide" onchange="setAutoHide(this.checked)"> Auto-hide top &amp; bottom bars while scrolling</label>
   </div>
@@ -733,6 +740,8 @@ $('qsearch').addEventListener('input',()=>{clearTimeout(qt);qt=setTimeout(async(
 async function saveQueue(){const n=prompt(tr('Playlist name'),'IPTV');if(n===null)return;const r=await post('/savequeue',{playlist:n||'IPTV'});toast(r.msg);load();}
 async function typeText(){const t=$('typebox').value;if(!t)return;const r=await post('/type',{text:t});toast(r.msg);$('typebox').value='';}
 async function cacheInfo(){const d=await (await api('/torrentcache')).json();$('tcache').textContent='💾 '+(d.bytes/1073741824).toFixed(2)+' GB used by saved torrents';}
+async function tvInfo(){try{const d=await (await api('/tvinfo')).json();$('tvrep').textContent=d.report;$('tvline').textContent=d.line||'';if(d.testing)setTimeout(tvInfo,1500);}catch(e){}}
+async function tvTest(t){const r=await post('/tvtest',{t:t});toast(r.msg);setTimeout(tvInfo,1200);}
 async function tvBrowse(){const r=await post('/browse',{url:$('burl').value.trim()});toast(r.msg);}
 setInterval(()=>{if(!document.hidden)loadHistory();},20000);
 

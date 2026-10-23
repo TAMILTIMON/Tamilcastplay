@@ -35,6 +35,28 @@ public final class T {
     }
 
     static {
+        TA.put("My TV", "என் டிவி");
+        HI.put("My TV", "मेरा टीवी");
+        TA.put("storage, memory, speed test", "சேமிப்பு, நினைவகம், வேக சோதனை");
+        HI.put("storage, memory, speed test", "स्टोरेज, मेमोरी, स्पीड टेस्ट");
+        TA.put("Internet speed test", "இணைய வேக சோதனை");
+        HI.put("Internet speed test", "इंटरनेट स्पीड टेस्ट");
+        TA.put("Free up memory", "நினைவகத்தை விடுவி");
+        HI.put("Free up memory", "मेमोरी खाली करें");
+        TA.put("Storage speed", "சேமிப்பு வேகம்");
+        HI.put("Storage speed", "स्टोरेज स्पीड");
+        TA.put("CPU & RAM speed", "CPU & RAM வேகம்");
+        HI.put("CPU & RAM speed", "CPU और RAM स्पीड");
+        TA.put("Running apps", "இயங்கும் செயலிகள்");
+        HI.put("Running apps", "चल रहे ऐप्स");
+        TA.put("tap to stop", "நிறுத்த தட்டவும்");
+        HI.put("tap to stop", "रोकने के लिए टैप करें");
+        TA.put("A test is already running", "ஒரு சோதனை ஏற்கனவே நடக்கிறது");
+        HI.put("A test is already running", "एक टेस्ट पहले से चल रहा है");
+        TA.put("Android only lets an app see other running apps through ADB. Turn on the 🔌 Full remote (ADB) first.", "Android பிற இயங்கும் செயலிகளை ADB மூலம் மட்டுமே காட்டும். முதலில் 🔌 முழு ரிமோட் (ADB) இயக்கவும்.");
+        HI.put("Android only lets an app see other running apps through ADB. Turn on the 🔌 Full remote (ADB) first.", "Android दूसरे चल रहे ऐप सिर्फ़ ADB से दिखाता है। पहले 🔌 पूरा रिमोट (ADB) चालू करें।");
+        TA.put("RAM speed and CPU speed are measured by a short test (Android does not report them). “Free up memory” closes background apps; with the 🔌 ADB full remote it can stop any app.", "RAM, CPU வேகங்கள் சிறிய சோதனையால் அளக்கப்படுகின்றன (Android அவற்றைச் சொல்லாது). “நினைவகத்தை விடுவி” பின்னணி செயலிகளை மூடும்; 🔌 ADB மூலம் எந்தச் செயலியையும் நிறுத்தலாம்.");
+        HI.put("RAM speed and CPU speed are measured by a short test (Android does not report them). “Free up memory” closes background apps; with the 🔌 ADB full remote it can stop any app.", "RAM और CPU स्पीड छोटे टेस्ट से मापी जाती है (Android इन्हें नहीं बताता)। “मेमोरी खाली करें” बैकग्राउंड ऐप बंद करता है; 🔌 ADB से कोई भी ऐप रोका जा सकता है।");
         TA.put("Keep this movie on the TV?", "இந்தப் படத்தை டிவியில் வைத்திருக்கவா?");
         HI.put("Keep this movie on the TV?", "यह फ़िल्म टीवी पर रखें?");
         TA.put("Keep = watch again later without internet (in the “Downloads” playlist). Delete = free the space.", "வைத்திரு = இணையம் இல்லாமல் பின்னர் பார்க்கலாம் (“Downloads” பிளேலிஸ்ட்). நீக்கு = இடம் விடுவிக்கும்.");

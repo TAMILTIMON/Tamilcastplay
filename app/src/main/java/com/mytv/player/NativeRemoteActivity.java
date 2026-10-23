@@ -1210,6 +1210,7 @@ public class NativeRemoteActivity extends AppCompatActivity {
             cmd("devname", dn.getText().toString().trim());
             hideKeyboard();
         }));
+        full(tvs, btn("📊 " + T.t("My TV") + " · " + T.t("storage, memory, speed test"), true, v -> myTv()));
         full(tvs, btn("🎨 " + T.t("TV colours (palette)"), false, v -> {
             String[] names = Palette.NAMES;
             new AlertDialog.Builder(this).setTitle(T.t("Palette")).setItems(names, (d, w) -> cmd("palette", String.valueOf(w))).show();
@@ -1218,6 +1219,49 @@ public class NativeRemoteActivity extends AppCompatActivity {
         full(tvs, btn("🌐 Web version", false, v -> startActivity(new Intent(this, RemoteWebActivity.class)
                 .putExtra(RemoteWebActivity.EXTRA_IP, ip).putExtra(RemoteWebActivity.EXTRA_NAME, tvName))));
         return p;
+    }
+
+    /** Report from the TV + tests and cleaning, run on the TV. */
+    private void myTv() {
+        ScrollView sv = new ScrollView(this);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(16), dp(8), dp(16), dp(8));
+        sv.addView(box);
+        final TextView ln = Ui.text(this, 14, Ui.ACCENT, true);
+        box.addView(ln);
+        final TextView rep = Ui.text(this, 12, Ui.TEXT, false);
+        rep.setTypeface(android.graphics.Typeface.MONOSPACE);
+        box.addView(rep);
+        row(box, btn("🌐 Speed", true, v -> call("/tvtest", m("t", "speed"), r -> toast(r.optString("msg")))),
+                btn("🧹 " + T.t("Free up memory"), true, v -> call("/tvclean", null, r -> ln.setText(r.optString("msg")))));
+        row(box, btn("💾 Disk", false, v -> call("/tvtest", m("t", "disk"), r -> toast(r.optString("msg")))),
+                btn("⚙ CPU/RAM", false, v -> call("/tvtest", m("t", "bench"), r -> toast(r.optString("msg")))),
+                btn("📋 Apps", false, v -> call("/tvapps", null, r -> {
+                    if (!r.optBoolean("ok")) {
+                        toast(r.optString("msg"));
+                        return;
+                    }
+                    final JSONArray a = r.optJSONArray("apps");
+                    String[] n = new String[a.length()];
+                    for (int i = 0; i < n.length; i++) n[i] = a.optJSONObject(i).optString("mem") + "   " + a.optJSONObject(i).optString("label");
+                    new AlertDialog.Builder(this).setTitle("📋 " + T.t("Running apps") + " · " + T.t("tap to stop"))
+                            .setItems(n, (d, w) -> call("/tvstop", m("name", a.optJSONObject(w).optString("name")), null)).show();
+                })));
+        final AlertDialog dlg = new AlertDialog.Builder(this).setTitle("📊 " + T.t("My TV")).setView(sv)
+                .setPositiveButton(T.t("Close"), null).create();
+        final Runnable[] upd = new Runnable[1];
+        upd[0] = () -> {
+            if (!dlg.isShowing()) return;
+            call("/tvinfo", null, r -> {
+                rep.setText(r.optString("report"));
+                String l = r.optString("line");
+                if (!l.isEmpty()) ln.setText(l);
+            });
+            main.postDelayed(upd[0], 2000);
+        };
+        dlg.setOnShowListener(x -> upd[0].run());
+        dlg.show();
     }
 
     private void loadLists() {
